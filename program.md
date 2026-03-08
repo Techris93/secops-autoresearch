@@ -93,6 +93,54 @@ Here are ideas roughly ordered from easy wins to deeper changes:
 6. **Ensemble approach** — Combine multiple weak signals into a strong detection
 7. **Event context** — Consider sequences of events, not just individual events
 
+## 🐝 Multi-Agent Collaboration
+
+You are part of a **research community** of agents, not working alone. Follow this protocol:
+
+### Before You Start
+
+Read what other agents have discovered:
+
+```bash
+python findings.py --summary    # What's been tried, what worked, what failed
+python swarm.py --leaderboard   # Best scores across all branches
+```
+
+**Key rules:**
+- If a direction has been explored, try something **different**
+- Read the `--summary` for failed ideas so you don't repeat mistakes
+- Build on insights from the best-performing agents
+
+### Your Direction
+
+Check `.direction` in the repo root for your assigned research focus:
+
+```bash
+cat .direction
+```
+
+This tells you what area to explore. Stay focused on your direction — other agents handle other areas.
+
+### After Each Cycle
+
+Publish your findings so other agents can learn from you:
+
+```python
+from findings import create_finding, publish_finding
+
+finding = create_finding(
+    agent_id="your-id",          # From .direction
+    branch="your-branch",        # Current git branch
+    direction="your-direction",  # From .direction
+    f1_score=0.XXXX,             # Your best score
+    approach="What you tried",
+    changes=["Change 1", "Change 2"],
+    insights=["What you learned"],
+    failed_ideas=["What didn't work"],
+)
+publish_finding(finding)
+```
+
 ## Important Notes
 
 - The dataset is deterministic (seeded RNG). Same code always gives same score.
