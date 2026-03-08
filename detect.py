@@ -5,7 +5,7 @@ The ONLY file the AI agent modifies.
 Contains detection rules, anomaly thresholds, and scoring logic.
 The agent iterates on these to maximize the F1-score computed by evaluate.py.
 
-Current baseline: Rules ported from OpenSentinel with initial thresholds.
+Experiment 1: Tuned thresholds, added LOLBin rule, added FP exclusions.
 """
 
 import re
@@ -33,7 +33,7 @@ def detect_brute_force(events: List[Dict]) -> List[str]:
     T1110 — Brute Force Detection
     Detects multiple failed login attempts from a single source IP.
     """
-    THRESHOLD = 5  # min failed attempts to flag
+    THRESHOLD = 3  # lowered from 5 to catch slow brute force
     WINDOW_MINUTES = 5
 
     # Group auth failures by source IP
@@ -43,10 +43,19 @@ def detect_brute_force(events: List[Dict]) -> List[str]:
             event.get("action") == "failure"):
             failures_by_ip[event.get("src_ip", "")].append(event)
 
+    # Also track which IPs have successful logins right after failures
+    # (benign users who typo their password get success quickly)
+    success_by_ip: Dict[str, int] = defaultdict(int)
+    for event in events:
+        if (event.get("sourcetype") == "auth" and
+            event.get("action") == "success"):
+            success_by_ip[event.get("src_ip", "")] += 1
+
     detected = []
     for ip, fails in failures_by_ip.items():
-        if len(fails) >= THRESHOLD:
-            # Flag all events from this IP as malicious
+        # Skip if the ratio of failures to successes is low (likely typos)
+        successes = success_by_ip.get(ip, 0)
+        if len(fails) >= THRESHOLD and (successes == 0 or len(fails) / max(successes, 1) > 2):
             for event in fails:
                 detected.append(event["event_id"])
             # Also flag any successful auth from same IP (compromised account)
@@ -60,20 +69,36 @@ def detect_brute_force(events: List[Dict]) -> List[str]:
     return detected
 
 
+# Known benign long-domain suffixes (CDNs, cloud services)
+BENIGN_DOMAIN_SUFFIXES = [
+    ".amazonaws.com", ".cloudfront.net", ".azurewebsites.net",
+    ".googleapis.com", ".microsoft.com", ".windows.net",
+    ".azure.com", ".aws.amazon.com", ".update.microsoft.com",
+]
+
+
+def _is_benign_long_domain(query: str) -> bool:
+    """Check if a long DNS query is from a known benign service."""
+    query_lower = query.lower()
+    return any(query_lower.endswith(suffix) for suffix in BENIGN_DOMAIN_SUFFIXES)
+
+
 def detect_dns_exfiltration(events: List[Dict]) -> List[str]:
     """
     T1048.003 — DNS Exfiltration
     Detects unusually long DNS queries indicating data exfiltration.
+    Filters out known CDN/cloud domains to reduce false positives.
     """
-    QUERY_LENGTH_THRESHOLD = 50
-    MIN_SUSPICIOUS_QUERIES = 3  # from same source
+    QUERY_LENGTH_THRESHOLD = 25  # lowered from 50 to catch shorter encoded exfil
+    MIN_SUSPICIOUS_QUERIES = 3   # from same source
 
-    # Find long DNS queries grouped by source
+    # Find long DNS queries grouped by source, excluding known benign domains
     long_queries_by_src: Dict[str, List[Dict]] = defaultdict(list)
     for event in events:
         if event.get("sourcetype") == "dns":
-            query_len = event.get("query_length", len(event.get("query", "")))
-            if query_len > QUERY_LENGTH_THRESHOLD:
+            query = event.get("query", "")
+            query_len = event.get("query_length", len(query))
+            if query_len > QUERY_LENGTH_THRESHOLD and not _is_benign_long_domain(query):
                 long_queries_by_src[event.get("src_ip", "")].append(event)
 
     detected = []
@@ -90,8 +115,8 @@ def detect_c2_beaconing(events: List[Dict]) -> List[str]:
     T1071 — C2 Beaconing
     Detects periodic outbound connections to the same destination.
     """
-    MIN_CONNECTIONS = 15
-    MAX_JITTER_RATIO = 0.3  # max coefficient of variation
+    MIN_CONNECTIONS = 5  # lowered from 15 to catch stealthy C2
+    MAX_AVG_BYTES_OUT = 600  # C2 beacons send small packets
 
     # Group outbound firewall events by (src, dest) pairs
     connections: Dict[str, List[Dict]] = defaultdict(list)
@@ -105,10 +130,16 @@ def detect_c2_beaconing(events: List[Dict]) -> List[str]:
     detected = []
     for key, conn_events in connections.items():
         if len(conn_events) >= MIN_CONNECTIONS:
-            # Check for periodicity by analyzing inter-arrival times
-            # Simple heuristic: many connections to same dest = suspicious
-            for event in conn_events:
-                detected.append(event["event_id"])
+            # Use byte-ratio heuristic: C2 beacons have small, uniform payloads
+            # Legitimate services transfer large, varied amounts of data
+            avg_bytes_out = sum(e.get("bytes_out", 0) for e in conn_events) / len(conn_events)
+            avg_bytes_in = sum(e.get("bytes_in", 0) for e in conn_events) / len(conn_events)
+
+            # C2 beacons: small outbound, small inbound
+            # Chatty services: large inbound (responses), varied outbound
+            if avg_bytes_out <= MAX_AVG_BYTES_OUT and avg_bytes_in < 1000:
+                for event in conn_events:
+                    detected.append(event["event_id"])
 
     return detected
 
@@ -119,6 +150,8 @@ def detect_lateral_movement(events: List[Dict]) -> List[str]:
     Detects a single IP connecting to multiple internal hosts on port 445.
     """
     UNIQUE_DEST_THRESHOLD = 3
+    # Admin subnet IPs are expected to do multi-host SMB (patch deployment, etc.)
+    ADMIN_SUBNET = "10.0.1."  # first subnet is IT admins
 
     # Group SMB connections by source
     smb_by_src: Dict[str, Dict[str, List[Dict]]] = defaultdict(lambda: defaultdict(list))
@@ -131,6 +164,9 @@ def detect_lateral_movement(events: List[Dict]) -> List[str]:
 
     detected = []
     for src, destinations in smb_by_src.items():
+        # Skip admin subnet — legitimate multi-host SMB activity
+        if src.startswith(ADMIN_SUBNET):
+            continue
         if len(destinations) >= UNIQUE_DEST_THRESHOLD:
             for dest_events in destinations.values():
                 for event in dest_events:
@@ -168,20 +204,30 @@ def detect_powershell_abuse(events: List[Dict]) -> List[str]:
     return detected
 
 
+# Known safe sudo commands (routine admin tasks)
+SAFE_SUDO_PATTERNS = [
+    r"sudo apt", r"sudo yum", r"sudo systemctl", r"sudo service",
+    r"sudo cat /var/log", r"sudo tail", r"sudo grep",
+]
+
+
 def detect_privilege_escalation(events: List[Dict]) -> List[str]:
     """
     T1068 — Privilege Escalation
-    Detects privilege escalation attempts.
+    Detects privilege escalation attempts, excluding known safe commands.
     """
-    ESCALATION_COMMANDS = ["sudo", "su", "runas", "pkexec"]
     EXCLUDED_USERS = ["root", "SYSTEM", "admin"]
 
     detected = []
     for event in events:
         if event.get("action") == "escalation":
             user = event.get("user", "")
+            cmd = event.get("command", "")
             if user not in EXCLUDED_USERS:
-                detected.append(event["event_id"])
+                # Skip known safe administrative commands
+                is_safe = any(re.search(p, cmd, re.IGNORECASE) for p in SAFE_SUDO_PATTERNS)
+                if not is_safe:
+                    detected.append(event["event_id"])
 
     return detected
 
@@ -216,6 +262,29 @@ class AnomalyDetector:
         return None
 
 
+# ═══ NEW RULE: Fileless / LOLBin Detection ═══════════════════════════════════
+
+LOLBIN_PROCESSES = [
+    "mshta.exe", "certutil.exe", "regsvr32.exe", "rundll32.exe",
+    "wscript.exe", "cscript.exe", "msiexec.exe", "bitsadmin.exe",
+]
+
+
+def detect_fileless_attack(events: List[Dict]) -> List[str]:
+    """
+    T1218 — Fileless Attack / LOLBin Abuse
+    Detects execution of known living-off-the-land binaries.
+    """
+    detected = []
+    for event in events:
+        if event.get("sourcetype") == "sysmon":
+            process = event.get("process", "").lower()
+            if process in LOLBIN_PROCESSES:
+                detected.append(event["event_id"])
+
+    return detected
+
+
 # ═══ Main Detection Pipeline ═════════════════════════════════════════════════
 
 # Registry of all active detection rules
@@ -226,6 +295,7 @@ DETECTION_RULES = [
     {"id": "RULE-004", "name": "Lateral Movement (SMB)", "mitre": "T1021.002", "fn": detect_lateral_movement},
     {"id": "RULE-005", "name": "PowerShell Abuse",       "mitre": "T1059.001", "fn": detect_powershell_abuse},
     {"id": "RULE-006", "name": "Privilege Escalation",   "mitre": "T1068",     "fn": detect_privilege_escalation},
+    {"id": "RULE-007", "name": "Fileless / LOLBin",      "mitre": "T1218",     "fn": detect_fileless_attack},
 ]
 
 
