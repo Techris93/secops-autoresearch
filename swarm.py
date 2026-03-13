@@ -13,9 +13,7 @@ Usage:
 """
 
 import os
-import sys
 import json
-import shutil
 import subprocess
 import argparse
 from datetime import datetime
@@ -96,6 +94,14 @@ def branch_exists(name: str) -> bool:
     return bool(result.stdout.strip())
 
 
+def has_uncommitted_changes(paths: Optional[List[str]] = None) -> bool:
+    args = ["status", "--porcelain"]
+    if paths:
+        args.extend(["--", *paths])
+    result = git(args, check=False)
+    return bool(result.stdout.strip())
+
+
 def get_branch_score(branch: str) -> Optional[float]:
     """Get the best F1 score from a branch's commit messages."""
     result = git(["log", branch, "--oneline", "-20", "--format=%s"], check=False)
@@ -156,7 +162,7 @@ def spawn_branches(count: int, dry_run: bool = False) -> List[Dict]:
 
         # Write a direction file so the agent knows what to focus on
         direction_file = os.path.join(REPO_DIR, ".direction")
-        with open(direction_file, "w") as f:
+        with open(direction_file, "w", encoding="utf-8") as f:
             json.dump({
                 "agent_id": f"agent-{agent_num + i}",
                 "branch": branch_name,
@@ -225,7 +231,7 @@ def show_leaderboard():
     branches = list_experiment_branches()
 
     print(f"\n{'═' * 65}")
-    print(f"  🏆 Leaderboard")
+    print("  🏆 Leaderboard")
     print(f"{'═' * 65}\n")
 
     entries = []
@@ -306,26 +312,41 @@ def adopt_branch(branch: str, confirm: bool = False):
     if not confirm:
         print(f"  ⚠️  This will overwrite detect.py on main with code from {branch} ({score_str}).")
         print(f"      Review the code first: git show {branch}:detect.py")
-        print(f"      To proceed, run with --confirm flag.")
+        print("      To proceed, run with --confirm flag.")
         return
 
-    # Switch to main and apply
+    if has_uncommitted_changes():
+        print("  ❌ Refusing to adopt into main with a dirty working tree.")
+        print("      Commit or stash your current changes, then retry.")
+        return
+
     original = get_current_branch()
-    git(["checkout", "main"])
+    switched_branch = False
 
-    detect_path = os.path.join(REPO_DIR, "detect.py")
-    with open(detect_path, "w") as f:
-        f.write(result.stdout)
+    try:
+        if original != "main":
+            git(["checkout", "main"])
+            switched_branch = True
 
-    git(["add", "detect.py"])
-    git(["commit", "-m",
-         f"adopt: {branch} ({score_str})\n\n"
-         f"Cherry-picked detect.py from {branch}"])
+        detect_path = os.path.join(REPO_DIR, "detect.py")
+        with open(detect_path, "w", encoding="utf-8") as f:
+            f.write(result.stdout)
 
-    print(f"  ✅ Adopted detect.py from {branch} ({score_str}) into main")
+        try:
+            git(["add", "detect.py"])
+            git(["commit", "-m",
+                 f"adopt: {branch} ({score_str})\n\n"
+                 f"Cherry-picked detect.py from {branch}"])
+        except subprocess.CalledProcessError as error:
+            git(["restore", "--source=HEAD", "--", "detect.py"], check=False)
+            detail = (error.stderr or error.stdout or str(error)).strip()
+            print(f"  ❌ Adoption failed: {detail[:200]}")
+            return
 
-    if original != "main":
-        git(["checkout", original], check=False)
+        print(f"  ✅ Adopted detect.py from {branch} ({score_str}) into main")
+    finally:
+        if switched_branch:
+            git(["checkout", original], check=False)
 
 
 # ═══ CLI ══════════════════════════════════════════════════════════════════════
@@ -370,7 +391,7 @@ def main():
         spawned = spawn_branches(args.spawn, dry_run=args.dry_run)
         print(f"\n  Spawned {len(spawned)} branches.")
         if not args.dry_run:
-            print(f"  Next: check out a branch and start your agent.\n")
+            print("  Next: check out a branch and start your agent.\n")
 
     elif args.status:
         show_status()
@@ -383,7 +404,7 @@ def main():
 
     elif args.directions:
         print(f"\n{'═' * 55}")
-        print(f"  📋 Available Research Directions")
+        print("  📋 Available Research Directions")
         print(f"{'═' * 55}\n")
         for d in RESEARCH_DIRECTIONS:
             print(f"  → {d['name']}")

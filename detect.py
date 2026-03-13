@@ -10,7 +10,8 @@ Current baseline: Rules ported from OpenSentinel with initial thresholds.
 
 import re
 import math
-from typing import List, Dict, Any, Optional
+from datetime import datetime
+from typing import List, Dict, Any, Optional, Iterable
 from collections import defaultdict
 
 
@@ -20,6 +21,97 @@ from collections import defaultdict
 # Anomaly detector settings
 ANOMALY_Z_THRESHOLD = 2.5
 ANOMALY_MIN_SAMPLES = 10
+TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+BENIGN_DNS_BASE_DOMAINS = {
+    "amazon.com",
+    "cloudflare.com",
+    "cloudfront.net",
+    "github.com",
+    "google.com",
+    "googleapis.com",
+    "microsoft.com",
+    "office365.com",
+    "slack.com",
+    "zoom.us",
+    "azurewebsites.net",
+}
+
+FILELESS_PATTERNS = {
+    "mshta.exe": [r"vbscript:", r"https?://", r"createobject"],
+    "certutil.exe": [r"-urlcache", r"-split", r"https?://"],
+    "regsvr32.exe": [r"/i:https?://", r"scrobj\.dll"],
+    "rundll32.exe": [r"javascript:", r"runhtmlapplication", r"mshtml"],
+    "wscript.exe": [r"\\users\\public\\", r"https?://", r"\.vbs\b"],
+    "cscript.exe": [r"\\users\\public\\", r"https?://", r"\.vbs\b"],
+}
+
+
+def parse_timestamp(timestamp: str) -> datetime:
+    normalized = timestamp[:-1] if timestamp.endswith("Z") else timestamp
+    return datetime.fromisoformat(normalized)
+
+
+def is_internal_ip(ip: str) -> bool:
+    return ip.startswith("10.")
+
+
+def is_external_ip(ip: str) -> bool:
+    return bool(ip) and not is_internal_ip(ip)
+
+
+def minutes_between(start: Dict, end: Dict) -> float:
+    return (parse_timestamp(end["timestamp"]) - parse_timestamp(start["timestamp"])).total_seconds() / 60.0
+
+
+def base_domain(query: str) -> str:
+    parts = query.lower().split(".")
+    if len(parts) < 2:
+        return query.lower()
+    return ".".join(parts[-2:])
+
+
+def first_label(query: str) -> str:
+    return query.lower().split(".", 1)[0]
+
+
+def digit_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    return sum(char.isdigit() for char in text) / len(text)
+
+
+def shannon_entropy(text: str) -> float:
+    if not text:
+        return 0.0
+
+    counts = defaultdict(int)
+    for char in text:
+        counts[char] += 1
+
+    entropy = 0.0
+    length = len(text)
+    for count in counts.values():
+        probability = count / length
+        entropy -= probability * math.log2(probability)
+    return entropy
+
+
+def average(values: Iterable[float]) -> float:
+    values = list(values)
+    return sum(values) / len(values) if values else 0.0
+
+
+def coefficient_of_variation(values: List[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+
+    avg = average(values)
+    if avg == 0:
+        return 0.0
+
+    variance = sum((value - avg) ** 2 for value in values) / len(values)
+    return math.sqrt(variance) / avg
 
 # ═══ Detection Rules ═════════════════════════════════════════════════════════
 # Each rule has:
@@ -33,31 +125,58 @@ def detect_brute_force(events: List[Dict]) -> List[str]:
     T1110 — Brute Force Detection
     Detects multiple failed login attempts from a single source IP.
     """
-    THRESHOLD = 5  # min failed attempts to flag
-    WINDOW_MINUTES = 5
+    RAPID_THRESHOLD = 6
+    RAPID_WINDOW_MINUTES = 10
+    SLOW_THRESHOLD = 3
+    SLOW_MIN_SPAN_MINUTES = 30
+    COMPROMISE_WINDOW_MINUTES = 20
 
-    # Group auth failures by source IP
-    failures_by_ip: Dict[str, List[Dict]] = defaultdict(list)
+    failures_by_actor: Dict[tuple[str, str], List[Dict]] = defaultdict(list)
+    successes_by_actor: Dict[tuple[str, str], List[Dict]] = defaultdict(list)
+
     for event in events:
-        if (event.get("sourcetype") == "auth" and
-            event.get("action") == "failure"):
-            failures_by_ip[event.get("src_ip", "")].append(event)
+        if event.get("sourcetype") != "auth":
+            continue
 
-    detected = []
-    for ip, fails in failures_by_ip.items():
-        if len(fails) >= THRESHOLD:
-            # Flag all events from this IP as malicious
-            for event in fails:
-                detected.append(event["event_id"])
-            # Also flag any successful auth from same IP (compromised account)
-            for event in events:
-                if (event.get("src_ip") == ip and
-                    event.get("sourcetype") == "auth" and
-                    event.get("action") == "success" and
-                    event["event_id"] not in detected):
-                    detected.append(event["event_id"])
+        actor = (event.get("src_ip", ""), event.get("user", ""))
+        if event.get("action") == "failure":
+            failures_by_actor[actor].append(event)
+        elif event.get("action") == "success":
+            successes_by_actor[actor].append(event)
 
-    return detected
+    detected = set()
+    for actor, failures in failures_by_actor.items():
+        src_ip, _user = actor
+        if not is_external_ip(src_ip):
+            continue
+
+        ordered_failures = sorted(failures, key=lambda event: event["timestamp"])
+        ordered_successes = sorted(successes_by_actor.get(actor, []), key=lambda event: event["timestamp"])
+        compromise_after_failure = False
+
+        window_start = 0
+        for window_end, event in enumerate(ordered_failures):
+            while minutes_between(ordered_failures[window_start], event) > RAPID_WINDOW_MINUTES:
+                window_start += 1
+
+            if window_end - window_start + 1 >= RAPID_THRESHOLD:
+                compromise_after_failure = True
+                for flagged in ordered_failures[window_start:window_end + 1]:
+                    detected.add(flagged["event_id"])
+
+        if len(ordered_failures) >= SLOW_THRESHOLD:
+            span_minutes = minutes_between(ordered_failures[0], ordered_failures[-1])
+            if span_minutes >= SLOW_MIN_SPAN_MINUTES and not ordered_successes:
+                for flagged in ordered_failures:
+                    detected.add(flagged["event_id"])
+
+        if compromise_after_failure:
+            last_failure = ordered_failures[-1]
+            for success in ordered_successes:
+                if 0 <= minutes_between(last_failure, success) <= COMPROMISE_WINDOW_MINUTES:
+                    detected.add(success["event_id"])
+
+    return list(detected)
 
 
 def detect_dns_exfiltration(events: List[Dict]) -> List[str]:
@@ -65,24 +184,39 @@ def detect_dns_exfiltration(events: List[Dict]) -> List[str]:
     T1048.003 — DNS Exfiltration
     Detects unusually long DNS queries indicating data exfiltration.
     """
-    QUERY_LENGTH_THRESHOLD = 50
-    MIN_SUSPICIOUS_QUERIES = 3  # from same source
+    MIN_QUERIES_PER_DOMAIN = 5
+    MIN_LABEL_LENGTH = 15
+    MIN_ENTROPY = 3.0
+    MIN_UNIQUE_LABEL_RATIO = 0.8
 
-    # Find long DNS queries grouped by source
-    long_queries_by_src: Dict[str, List[Dict]] = defaultdict(list)
+    queries_by_src_and_domain: Dict[tuple[str, str], List[Dict]] = defaultdict(list)
     for event in events:
         if event.get("sourcetype") == "dns":
-            query_len = event.get("query_length", len(event.get("query", "")))
-            if query_len > QUERY_LENGTH_THRESHOLD:
-                long_queries_by_src[event.get("src_ip", "")].append(event)
+            query = event.get("query", "")
+            queries_by_src_and_domain[(event.get("src_ip", ""), base_domain(query))].append(event)
 
-    detected = []
-    for ip, queries in long_queries_by_src.items():
-        if len(queries) >= MIN_SUSPICIOUS_QUERIES:
-            for event in queries:
-                detected.append(event["event_id"])
+    detected = set()
+    for (_src_ip, domain), queries in queries_by_src_and_domain.items():
+        if domain in BENIGN_DNS_BASE_DOMAINS or len(queries) < MIN_QUERIES_PER_DOMAIN:
+            continue
 
-    return detected
+        labels = [first_label(event.get("query", "")) for event in queries]
+        suspicious_labels = [
+            label for label in labels
+            if len(label) >= MIN_LABEL_LENGTH and (
+                shannon_entropy(label) >= MIN_ENTROPY or digit_ratio(label) >= 0.2
+            )
+        ]
+        unique_ratio = len(set(labels)) / len(labels)
+        has_txt_queries = any(event.get("query_type") == "TXT" for event in queries)
+        has_long_queries = any(event.get("query_length", len(event.get("query", ""))) >= 40 for event in queries)
+
+        if unique_ratio >= MIN_UNIQUE_LABEL_RATIO and len(suspicious_labels) >= max(3, len(queries) // 2):
+            if has_txt_queries or has_long_queries or len(queries) >= 8:
+                for event in queries:
+                    detected.add(event["event_id"])
+
+    return list(detected)
 
 
 def detect_c2_beaconing(events: List[Dict]) -> List[str]:
@@ -90,10 +224,10 @@ def detect_c2_beaconing(events: List[Dict]) -> List[str]:
     T1071 — C2 Beaconing
     Detects periodic outbound connections to the same destination.
     """
-    MIN_CONNECTIONS = 15
-    MAX_JITTER_RATIO = 0.3  # max coefficient of variation
+    MIN_CONNECTIONS = 5
+    MAX_BYTES_OUT = 600
+    MAX_BYTES_IN = 250
 
-    # Group outbound firewall events by (src, dest) pairs
     connections: Dict[str, List[Dict]] = defaultdict(list)
     for event in events:
         if (event.get("sourcetype") == "firewall" and
@@ -102,15 +236,26 @@ def detect_c2_beaconing(events: List[Dict]) -> List[str]:
             key = f"{event.get('src_ip')}:{event.get('dest_ip')}"
             connections[key].append(event)
 
-    detected = []
-    for key, conn_events in connections.items():
-        if len(conn_events) >= MIN_CONNECTIONS:
-            # Check for periodicity by analyzing inter-arrival times
-            # Simple heuristic: many connections to same dest = suspicious
-            for event in conn_events:
-                detected.append(event["event_id"])
+    detected = set()
+    for _key, conn_events in connections.items():
+        if len(conn_events) < MIN_CONNECTIONS:
+            continue
 
-    return detected
+        ordered = sorted(conn_events, key=lambda event: event["timestamp"])
+        max_bytes_out = max(event.get("bytes_out", 0) for event in ordered)
+        max_bytes_in = max(event.get("bytes_in", 0) for event in ordered)
+        ports = {event.get("dest_port") for event in ordered}
+        low_volume = max_bytes_out <= MAX_BYTES_OUT and max_bytes_in <= MAX_BYTES_IN
+        stealth_low_volume = max_bytes_out <= 350 and max_bytes_in <= 170
+
+        if len(ordered) >= 15 and low_volume:
+            for event in ordered:
+                detected.add(event["event_id"])
+        elif len(ordered) >= 5 and low_volume and stealth_low_volume and ports == {443}:
+            for event in ordered:
+                detected.add(event["event_id"])
+
+    return list(detected)
 
 
 def detect_lateral_movement(events: List[Dict]) -> List[str]:
@@ -118,9 +263,11 @@ def detect_lateral_movement(events: List[Dict]) -> List[str]:
     T1021.002 — Lateral Movement via SMB
     Detects a single IP connecting to multiple internal hosts on port 445.
     """
-    UNIQUE_DEST_THRESHOLD = 3
+    UNIQUE_DEST_THRESHOLD = 4
+    WINDOW_MINUTES = 20
+    MAX_AVERAGE_GAP_SECONDS = 240
+    MAX_TRANSFER_BYTES = 100000
 
-    # Group SMB connections by source
     smb_by_src: Dict[str, Dict[str, List[Dict]]] = defaultdict(lambda: defaultdict(list))
     for event in events:
         if (event.get("sourcetype") == "firewall" and
@@ -129,14 +276,37 @@ def detect_lateral_movement(events: List[Dict]) -> List[str]:
             dest = event.get("dest_ip", "")
             smb_by_src[src][dest].append(event)
 
-    detected = []
-    for src, destinations in smb_by_src.items():
-        if len(destinations) >= UNIQUE_DEST_THRESHOLD:
-            for dest_events in destinations.values():
-                for event in dest_events:
-                    detected.append(event["event_id"])
+    detected = set()
+    for _src, destinations in smb_by_src.items():
+        flat_events = sorted(
+            [event for dest_events in destinations.values() for event in dest_events],
+            key=lambda event: event["timestamp"],
+        )
+        if len(flat_events) < UNIQUE_DEST_THRESHOLD:
+            continue
 
-    return detected
+        window_start = 0
+        for window_end, event in enumerate(flat_events):
+            while minutes_between(flat_events[window_start], event) > WINDOW_MINUTES:
+                window_start += 1
+
+            candidate_events = flat_events[window_start:window_end + 1]
+            unique_destinations = {candidate.get("dest_ip") for candidate in candidate_events}
+            if len(unique_destinations) < UNIQUE_DEST_THRESHOLD:
+                continue
+
+            deltas = [
+                (parse_timestamp(current["timestamp"]) - parse_timestamp(previous["timestamp"])).total_seconds()
+                for previous, current in zip(candidate_events, candidate_events[1:])
+            ]
+            average_gap = average(deltas)
+            max_transfer = max(candidate.get("bytes_out", 0) for candidate in candidate_events)
+
+            if average_gap <= MAX_AVERAGE_GAP_SECONDS and max_transfer <= MAX_TRANSFER_BYTES:
+                for candidate in candidate_events:
+                    detected.add(candidate["event_id"])
+
+    return list(detected)
 
 
 def detect_powershell_abuse(events: List[Dict]) -> List[str]:
@@ -173,15 +343,38 @@ def detect_privilege_escalation(events: List[Dict]) -> List[str]:
     T1068 — Privilege Escalation
     Detects privilege escalation attempts.
     """
-    ESCALATION_COMMANDS = ["sudo", "su", "runas", "pkexec"]
     EXCLUDED_USERS = ["root", "SYSTEM", "admin"]
+    SUSPICIOUS_COMMAND = re.compile(
+        r"(?i)(\brunas\b|\bpkexec\b|sudo\s+(su\b|/bin/(?:ba)?sh\b|-l\b))"
+    )
 
     detected = []
     for event in events:
         if event.get("action") == "escalation":
             user = event.get("user", "")
-            if user not in EXCLUDED_USERS:
+            command = event.get("command", "")
+            if user not in EXCLUDED_USERS and SUSPICIOUS_COMMAND.search(command):
                 detected.append(event["event_id"])
+
+    return detected
+
+
+def detect_fileless_lolbins(events: List[Dict]) -> List[str]:
+    """
+    T1218 — Fileless / LOLBin Abuse
+    Detects suspicious use of trusted Windows binaries for payload execution.
+    """
+    detected = []
+
+    for event in events:
+        if event.get("sourcetype") != "sysmon":
+            continue
+
+        process = event.get("process", "").lower()
+        command = event.get("command_line", "")
+        patterns = FILELESS_PATTERNS.get(process)
+        if patterns and any(re.search(pattern, command, re.IGNORECASE) for pattern in patterns):
+            detected.append(event["event_id"])
 
     return detected
 
@@ -206,10 +399,10 @@ class AnomalyDetector:
         if len(history) < ANOMALY_MIN_SAMPLES:
             return None
 
-        mean = sum(history) / len(history)
-        variance = sum((x - mean) ** 2 for x in history) / len(history)
+        avg = sum(history) / len(history)
+        variance = sum((x - avg) ** 2 for x in history) / len(history)
         std_dev = math.sqrt(variance) if variance > 0 else 0.001
-        z_score = (value - mean) / std_dev
+        z_score = (value - avg) / std_dev
 
         if abs(z_score) > self.z_threshold:
             return "anomaly"
@@ -226,6 +419,7 @@ DETECTION_RULES = [
     {"id": "RULE-004", "name": "Lateral Movement (SMB)", "mitre": "T1021.002", "fn": detect_lateral_movement},
     {"id": "RULE-005", "name": "PowerShell Abuse",       "mitre": "T1059.001", "fn": detect_powershell_abuse},
     {"id": "RULE-006", "name": "Privilege Escalation",   "mitre": "T1068",     "fn": detect_privilege_escalation},
+    {"id": "RULE-007", "name": "Fileless LOLBins",       "mitre": "T1218",     "fn": detect_fileless_lolbins},
 ]
 
 
@@ -249,7 +443,7 @@ def run_detection(events: List[Dict]) -> Dict[str, Any]:
             detected_ids = rule["fn"](events)
             rule_results[rule["id"]] = detected_ids
             all_detected.update(detected_ids)
-        except Exception as e:
+        except (KeyError, TypeError, ValueError, ZeroDivisionError, re.error) as e:
             print(f"  ⚠️  Rule {rule['id']} ({rule['name']}) error: {e}")
             rule_results[rule["id"]] = []
 
