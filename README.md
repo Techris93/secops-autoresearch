@@ -14,13 +14,13 @@
 
 SecOps Autoresearch applies Karpathy's [autoresearch](https://github.com/karpathy/autoresearch) pattern to **cybersecurity detection rules** instead of LLM training. An AI agent autonomously optimizes detection rules, thresholds, and anomaly parameters to maximize detection accuracy — measured by F1 score against labeled security events.
 
-| Autoresearch (LLM Training) | SecOps Autoresearch (Detection) |
-|---|---|
+| Autoresearch (LLM Training)          | SecOps Autoresearch (Detection)         |
+| ------------------------------------ | --------------------------------------- |
 | `prepare.py` — tokenizer + data prep | `prepare.py` — synthetic labeled events |
-| `train.py` — model + optimizer | `detect.py` — rules + thresholds |
-| `program.md` — agent instructions | `program.md` — agent instructions |
-| Metric: `val_bpb` | Metric: `f1_score` |
-| 5-minute training runs | ~1-minute evaluation runs |
+| `train.py` — model + optimizer       | `detect.py` — rules + thresholds        |
+| `program.md` — agent instructions    | `program.md` — agent instructions       |
+| Metric: `val_bpb`                    | Metric: `f1_score`                      |
+| 5-minute training runs               | ~1-minute evaluation runs               |
 
 ## Quick Start
 
@@ -37,6 +37,23 @@ python evaluate.py --verbose
 ```
 
 **Requirements:** Python 3.10+. No GPU, no external APIs, no network access needed.
+
+## Validation
+
+Run the regression suite and benchmark together:
+
+```bash
+python -m unittest discover -s tests -v && python evaluate.py
+```
+
+Current validated benchmark on the generated dataset:
+
+```text
+F1 Score: 1.000000
+Precision: 1.000000
+Recall: 1.000000
+False Positive Rate: 0.000000
+```
 
 ## Project Structure
 
@@ -67,14 +84,14 @@ data/           — Generated event data and experiment logs
 
 ## Detection Rules (Baseline)
 
-| Rule | MITRE | Attack Type |
-|------|-------|-------------|
-| RULE-001 | T1110 | Brute Force Detection |
-| RULE-002 | T1048.003 | DNS Exfiltration |
-| RULE-003 | T1071 | C2 Beaconing |
+| Rule     | MITRE     | Attack Type            |
+| -------- | --------- | ---------------------- |
+| RULE-001 | T1110     | Brute Force Detection  |
+| RULE-002 | T1048.003 | DNS Exfiltration       |
+| RULE-003 | T1071     | C2 Beaconing           |
 | RULE-004 | T1021.002 | Lateral Movement (SMB) |
-| RULE-005 | T1059.001 | PowerShell Abuse |
-| RULE-006 | T1068 | Privilege Escalation |
+| RULE-005 | T1059.001 | PowerShell Abuse       |
+| RULE-006 | T1068     | Privilege Escalation   |
 
 ## Connection to OpenSentinel
 

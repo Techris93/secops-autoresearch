@@ -9,7 +9,7 @@ build on winning ideas.
 
 Supports:
   - Local mode: findings stored in data/findings/ (single machine)
-  - GitHub mode: findings posted as Discussion comments (distributed)
+    - GitHub mode: findings posted as Issues by default (distributed)
 
 Usage:
     from findings import publish_finding, read_findings, get_leaderboard
@@ -68,8 +68,8 @@ def publish_finding(finding: Dict[str, Any]) -> str:
     filename = f"{agent}-{ts}-{score:.4f}.json"
     filepath = os.path.join(FINDINGS_DIR, filename)
 
-    with open(filepath, "w") as f:
-        json.dump(finding, f, indent=2)
+    with open(filepath, "w", encoding="utf-8") as handle:
+        json.dump(finding, handle, indent=2)
 
     print(f"  📄 Finding published: {filename}")
     return filepath
@@ -80,39 +80,39 @@ def read_findings(limit: int = 50) -> List[Dict[str, Any]]:
     if not os.path.exists(FINDINGS_DIR):
         return []
 
-    findings = []
+    loaded_findings = []
     for filename in os.listdir(FINDINGS_DIR):
         if filename.endswith(".json"):
             filepath = os.path.join(FINDINGS_DIR, filename)
             try:
-                with open(filepath, "r") as f:
-                    findings.append(json.load(f))
+                with open(filepath, "r", encoding="utf-8") as handle:
+                    loaded_findings.append(json.load(handle))
             except (json.JSONDecodeError, IOError):
                 continue
 
     # Sort by score, best first
-    findings.sort(key=lambda x: x.get("f1_score", 0), reverse=True)
-    return findings[:limit]
+    loaded_findings.sort(key=lambda x: x.get("f1_score", 0), reverse=True)
+    return loaded_findings[:limit]
 
 
 def get_leaderboard(top_n: int = 10) -> List[Dict]:
     """Get the top findings across all agents and branches."""
-    findings = read_findings(limit=top_n)
+    top_findings = read_findings(limit=top_n)
     return [
         {
             "rank": i + 1,
-            "agent": f.get("agent_id"),
-            "branch": f.get("branch"),
-            "direction": f.get("direction"),
-            "f1_score": f.get("f1_score"),
-            "approach": f.get("approach", "")[:80],
-            "timestamp": f.get("timestamp"),
+            "agent": finding.get("agent_id"),
+            "branch": finding.get("branch"),
+            "direction": finding.get("direction"),
+            "f1_score": finding.get("f1_score"),
+            "approach": finding.get("approach", "")[:80],
+            "timestamp": finding.get("timestamp"),
         }
-        for i, f in enumerate(findings)
+        for i, finding in enumerate(top_findings)
     ]
 
 
-def get_unexplored_directions(findings: List[Dict]) -> List[str]:
+def get_unexplored_directions(existing_findings: List[Dict]) -> List[str]:
     """Suggest research directions not yet tried."""
     all_directions = {
         "threshold-tuning",
@@ -127,33 +127,33 @@ def get_unexplored_directions(findings: List[Dict]) -> List[str]:
         "behavioral-profiling",
     }
 
-    tried = {f.get("direction", "") for f in findings}
+    tried = {finding.get("direction", "") for finding in existing_findings}
     return sorted(all_directions - tried)
 
 
 def summarize_for_agent(limit: int = 10) -> str:
     """Generate a text summary an agent can read before starting."""
-    findings = read_findings(limit=limit)
+    recent_findings = read_findings(limit=limit)
 
-    if not findings:
+    if not recent_findings:
         return "No previous findings. You are the first agent — explore freely."
 
     lines = [
-        f"=== Research Community Status: {len(findings)} findings ===\n",
-        f"Best F1 score so far: {findings[0]['f1_score']:.4f} "
-        f"(by {findings[0].get('agent_id', '?')} on {findings[0].get('branch', '?')})\n",
+        f"=== Research Community Status: {len(recent_findings)} findings ===\n",
+        f"Best F1 score so far: {recent_findings[0]['f1_score']:.4f} "
+        f"(by {recent_findings[0].get('agent_id', '?')} on {recent_findings[0].get('branch', '?')})\n",
     ]
 
     # Top findings
     lines.append("Top approaches:")
-    for i, f in enumerate(findings[:5]):
+    for i, finding in enumerate(recent_findings[:5]):
         lines.append(
-            f"  {i+1}. F1={f['f1_score']:.4f} [{f.get('direction', '?')}] "
-            f"— {f.get('approach', 'no description')[:100]}"
+            f"  {i+1}. F1={finding['f1_score']:.4f} [{finding.get('direction', '?')}] "
+            f"— {finding.get('approach', 'no description')[:100]}"
         )
 
     # Insights from best
-    best = findings[0]
+    best = recent_findings[0]
     if best.get("insights"):
         lines.append("\nKey insights from best agent:")
         for insight in best["insights"][:5]:
@@ -161,17 +161,17 @@ def summarize_for_agent(limit: int = 10) -> str:
 
     # Failed ideas to avoid
     all_failed = []
-    for f in findings:
-        all_failed.extend(f.get("failed_ideas", []))
+    for finding in recent_findings:
+        all_failed.extend(finding.get("failed_ideas", []))
     if all_failed:
         lines.append(f"\nFailed ideas to avoid ({len(all_failed)} total):")
         for idea in list(set(all_failed))[:8]:
             lines.append(f"  ✗ {idea}")
 
     # Unexplored
-    unexplored = get_unexplored_directions(findings)
+    unexplored = get_unexplored_directions(recent_findings)
     if unexplored:
-        lines.append(f"\nUnexplored directions to try:")
+        lines.append("\nUnexplored directions to try:")
         for d in unexplored[:5]:
             lines.append(f"  → {d}")
 
@@ -180,39 +180,34 @@ def summarize_for_agent(limit: int = 10) -> str:
 
 # ═══ GitHub Integration (Optional) ═══════════════════════════════════════════
 
-def publish_to_github_discussion(finding: Dict, repo: str = "") -> bool:
-    """Post a finding as a GitHub Discussion comment."""
-    if not repo:
-        # Try to detect from git remote
-        try:
-            result = subprocess.run(
-                ["git", "remote", "get-url", "origin"],
-                capture_output=True, text=True, cwd=REPO_DIR
-            )
-            remote = result.stdout.strip()
-            # Extract owner/repo from URL
-            if "github.com" in remote:
-                repo = remote.split("github.com")[-1].strip("/").replace(".git", "")
-        except Exception:
-            pass
+def detect_github_repo() -> str:
+    """Infer owner/repo from the current origin remote."""
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            cwd=REPO_DIR,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
-    if not repo:
-        print("  ⚠️  Could not detect GitHub repo. Skipping discussion post.")
-        return False
+    remote = result.stdout.strip()
+    if "github.com" not in remote:
+        return ""
+    return remote.split("github.com")[-1].strip("/:").replace(":", "/").replace(".git", "")
 
-    title = (
-        f"🔬 Finding: F1={finding['f1_score']:.4f} "
-        f"[{finding.get('direction', 'experiment')}] "
-        f"by {finding.get('agent_id', 'agent')}"
-    )
 
+def build_github_body(finding: Dict[str, Any]) -> str:
+    """Render a finding as markdown for a GitHub issue or discussion."""
     body_lines = [
         f"## Agent: `{finding.get('agent_id', '?')}`",
         f"**Branch:** `{finding.get('branch', '?')}`",
         f"**Direction:** {finding.get('direction', '?')}",
         f"**F1 Score:** `{finding['f1_score']:.6f}`",
         "",
-        f"### Approach",
+        "### Approach",
         finding.get("approach", "No description"),
         "",
         "### Changes Made",
@@ -235,27 +230,47 @@ def publish_to_github_discussion(finding: Dict, repo: str = "") -> bool:
         body_lines.append(json.dumps(finding["metrics"], indent=2))
         body_lines.append("```")
 
-    body = "\n".join(body_lines)
+    return "\n".join(body_lines)
+
+
+def publish_to_github_issue(finding: Dict[str, Any], repo: str = "") -> bool:
+    """Post a finding as a GitHub issue for distributed collaboration."""
+    repo = repo or detect_github_repo()
+    if not repo:
+        print("  ⚠️  Could not detect GitHub repo. Skipping GitHub publish.")
+        return False
+
+    title = (
+        f"🔬 Finding: F1={finding['f1_score']:.4f} "
+        f"[{finding.get('direction', 'experiment')}] "
+        f"by {finding.get('agent_id', 'agent')}"
+    )
+    body = build_github_body(finding)
 
     try:
         result = subprocess.run(
             ["gh", "issue", "create",
              "--repo", repo,
              "--title", title,
-             "--body", body,
-             "--label", "finding"],
-            capture_output=True, text=True, cwd=REPO_DIR,
-            env={**os.environ, "GITHUB_TOKEN": ""}  # use keyring auth
+             "--body", body],
+            capture_output=True,
+            text=True,
+            cwd=REPO_DIR,
+            check=False,
         )
         if result.returncode == 0:
-            print(f"  🌐 Published to GitHub: {result.stdout.strip()}")
+            print(f"  🌐 Published to GitHub Issues: {result.stdout.strip()}")
             return True
-        else:
-            print(f"  ⚠️  GitHub post failed: {result.stderr[:200]}")
-    except Exception as e:
+        print(f"  ⚠️  GitHub issue publish failed: {result.stderr[:200]}")
+    except (OSError, subprocess.SubprocessError) as e:
         print(f"  ⚠️  GitHub post error: {e}")
 
     return False
+
+
+def publish_to_github_discussion(finding: Dict[str, Any], repo: str = "") -> bool:
+    """Backward-compatible wrapper that publishes to GitHub Issues."""
+    return publish_to_github_issue(finding, repo=repo)
 
 
 # ═══ CLI ══════════════════════════════════════════════════════════════════════
