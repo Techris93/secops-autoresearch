@@ -52,6 +52,9 @@ def adapt(records: List[Dict[str, Any]], source_path: str, collected_from: str, 
                     "delivery_target": pick(record, ("deliveryTarget",), ("delivery_target",), ("target",)),
                     "mode": pick(record, ("mode",)),
                     "thread_requested": pick(record, ("threadRequested",), ("thread_requested",)),
+                    "label": pick(record, ("label",)),
+                    "attack_type": pick(record, ("attack_type",)),
+                    "mitre": pick(record, ("mitre",)),
                 },
             )
         )

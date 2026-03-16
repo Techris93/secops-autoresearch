@@ -43,6 +43,9 @@ def adapt(records: List[Dict[str, Any]], source_path: str, collected_from: str, 
                 payload={
                     "resumed_from": pick(record, ("resumedFrom",), ("resumed_from",), ("context", "resumedFrom"), ("context", "resumed_from")),
                     "message_count": pick(record, ("messageCount",), ("message_count",), ("context", "messageCount"), ("context", "message_count")),
+                    "label": pick(record, ("label",)),
+                    "attack_type": pick(record, ("attack_type",)),
+                    "mitre": pick(record, ("mitre",)),
                 },
             )
         )

@@ -44,6 +44,9 @@ def adapt(records: List[Dict[str, Any]], source_path: str, collected_from: str, 
                     "note": pick(record, ("note",)),
                     "policy_decision": pick(record, ("policyDecision",), ("policy_decision",)),
                     "restart_delay_ms": pick(record, ("restartDelayMs",), ("restart_delay_ms",)),
+                    "label": pick(record, ("label",)),
+                    "attack_type": pick(record, ("attack_type",)),
+                    "mitre": pick(record, ("mitre",)),
                 },
             )
         )

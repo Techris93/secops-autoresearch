@@ -451,11 +451,13 @@ def detect_openclaw_dangerous_exec(events: List[Dict]) -> List[str]:
         r"(?i)authorization:\s*bearer",
     ]
 
+    DANGEROUS_TOOL_NAMES = {"exec", "run_in_terminal", "execute_command", "shell", "bash", "sh"}
+
     detected = []
     for event in events:
         if not is_openclaw_event(event, "tool"):
             continue
-        if event.get("tool_name") != "exec":
+        if event.get("tool_name") not in DANGEROUS_TOOL_NAMES:
             continue
 
         command = extract_command_text(event)
@@ -478,6 +480,11 @@ def detect_openclaw_sensitive_config_change(events: List[Dict]) -> List[str]:
         "commands",
         "channels.",
         "skills.entries.",
+        "auth.",
+        "system.permissions",
+        "system.sandbox",
+        "network.allowedHosts",
+        "network.proxy",
     )
 
     detected = []
@@ -524,7 +531,12 @@ def detect_openclaw_repeated_policy_denials(events: List[Dict]) -> List[str]:
     for event in events:
         if not is_openclaw_event(event):
             continue
-        if not event.get("denied") and event.get("status") not in {"blocked", "approval-unavailable"}:
+        is_denied = (
+            bool(event.get("denied"))
+            or event.get("status") in {"blocked", "approval-unavailable"}
+            or event.get("approval_state") in {"denied", "blocked", "approval-unavailable"}
+        )
+        if not is_denied:
             continue
 
         session_key = openclaw_session_key(event)
@@ -560,7 +572,7 @@ def detect_openclaw_tool_burst(events: List[Dict]) -> List[str]:
     for event in events:
         if not is_openclaw_event(event, "tool"):
             continue
-        if event.get("action") != "start":
+        if event.get("action") not in {"start", "end"}:
             continue
         session_key = openclaw_session_key(event)
         if session_key:
@@ -598,24 +610,52 @@ def detect_openclaw_pairing_churn(events: List[Dict]) -> List[str]:
 
     pairing_by_session: Dict[str, List[Dict]] = defaultdict(list)
     for event in events:
-        if not is_openclaw_event(event, "pairing"):
+        if not is_openclaw_event(event, "pairing") and not is_openclaw_event(event, "session"):
+            continue
+        if not is_openclaw_event(event, "session") and event.get("action") is None:
             continue
         session_key = openclaw_session_key(event)
         if session_key:
             pairing_by_session[session_key].append(event)
 
     detected = set()
+
+    # Original pairing-surface logic: distinct actions + statuses within window
     for pairing_events in pairing_by_session.values():
+        if not any(is_openclaw_event(e, "pairing") for e in pairing_events):
+            continue
         ordered = sorted(pairing_events, key=lambda event: event["timestamp"])
         window_start = 0
         for window_end, event in enumerate(ordered):
             while minutes_between(ordered[window_start], event) > WINDOW_MINUTES:
                 window_start += 1
-
             candidate_events = ordered[window_start:window_end + 1]
             statuses = {candidate.get("status") for candidate in candidate_events}
             actions = {candidate.get("action") for candidate in candidate_events}
             if len(candidate_events) >= CHURN_THRESHOLD and len(actions) >= 2 and len(statuses) >= 2:
+                for candidate in candidate_events:
+                    detected.add(candidate["event_id"])
+
+    # Session-surface churn: many session_start events from same agent in window
+    SESSION_START_THRESHOLD = 4
+    session_starts_by_agent: Dict[str, List[Dict]] = defaultdict(list)
+    for event in events:
+        if not is_openclaw_event(event, "session"):
+            continue
+        if event.get("action") != "start":
+            continue
+        agent_id = event.get("agent_id") or event.get("channel") or ""
+        if agent_id:
+            session_starts_by_agent[agent_id].append(event)
+
+    for session_events in session_starts_by_agent.values():
+        ordered = sorted(session_events, key=lambda event: event["timestamp"])
+        window_start = 0
+        for window_end, event in enumerate(ordered):
+            while minutes_between(ordered[window_start], event) > WINDOW_MINUTES:
+                window_start += 1
+            candidate_events = ordered[window_start:window_end + 1]
+            if len(candidate_events) >= SESSION_START_THRESHOLD:
                 for candidate in candidate_events:
                     detected.add(candidate["event_id"])
 

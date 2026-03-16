@@ -65,6 +65,9 @@ def adapt(records: List[Dict[str, Any]], source_path: str, collected_from: str, 
                     "mutating": pick(record, ("data", "mutating"), ("mutating",)),
                     "background": pick(record, ("data", "background"), ("background",)),
                     "approval_state": pick(record, ("data", "approvalState"), ("approvalState",), ("approval_state",)),
+                    "label": pick(record, ("label",)),
+                    "attack_type": pick(record, ("attack_type",)),
+                    "mitre": pick(record, ("mitre",)),
                 },
             )
         )

@@ -196,11 +196,20 @@ python soc_store.py list
 ## Project Structure
 
 ```
-prepare.py      — Data prep: generates ~2000 labeled security events (DO NOT MODIFY)
-detect.py       — Detection rules + thresholds (AGENT MODIFIES THIS)
-evaluate.py     — Scoring engine: F1, precision, recall, FPR (DO NOT MODIFY)
-program.md      — Agent instructions for the autonomous loop
-data/           — Generated event data and experiment logs
+prepare.py                    — Synthetic data generation (~2000 labeled events)
+detect.py                     — Core detector and rule registry
+evaluate.py                   — Synthetic benchmark evaluator
+evaluate_botsv3.py            — Safe BOTSv3 benchmark evaluator
+evaluate_openclaw.py          — OpenClaw replay evaluator
+ingest_openclaw.py            — Native OpenClaw surface ingester -> audit JSONL
+openclaw_prepare.py           — Adapter-event normalizer -> detector replay format
+openclaw_findings.py          — Incident generation with dedup + severity ranking
+soc_store.py                  — Local SQLite SOC findings store + CLI helpers
+openclaw_adapters/            — Surface-specific adapters (tool/session/subagent/config/restart)
+schemas/                      — OpenClaw adapter + normalized event contracts
+tests/                        — Regression tests (synthetic + OpenClaw ingest/pipeline/store)
+program.md                    — Agent loop instructions
+data/                         — Datasets, replay bundles, and findings artifacts
 ```
 
 ## How It Works
@@ -220,16 +229,35 @@ data/           — Generated event data and experiment logs
 
 5. Repeat indefinitely — the agent accumulates improvements over time
 
-## Detection Rules (Baseline)
+## Detection Rules (Current)
 
-| Rule     | MITRE     | Attack Type            |
-| -------- | --------- | ---------------------- |
-| RULE-001 | T1110     | Brute Force Detection  |
-| RULE-002 | T1048.003 | DNS Exfiltration       |
-| RULE-003 | T1071     | C2 Beaconing           |
-| RULE-004 | T1021.002 | Lateral Movement (SMB) |
-| RULE-005 | T1059.001 | PowerShell Abuse       |
-| RULE-006 | T1068     | Privilege Escalation   |
+Core synthetic/BOTSv3 rules:
+
+- `RULE-001` `T1110` Brute Force
+- `RULE-002` `T1048.003` DNS Exfiltration
+- `RULE-003` `T1071` C2 Beaconing
+- `RULE-004` `T1021.002` Lateral Movement (SMB)
+- `RULE-005` `T1059.001` PowerShell Abuse
+- `RULE-006` `T1068` Privilege Escalation
+- `RULE-007` `T1218` Fileless LOLBins
+
+OpenClaw-specific rules:
+
+- `RULE-101` `T1059` Dangerous Exec
+- `RULE-102` `T1098` Sensitive Config Change
+- `RULE-103` `T1587` Skill Source Drift
+- `RULE-104` `T1622` Repeated Policy Denials
+- `RULE-105` `T1082` Tool Burst Activity
+- `RULE-106` `T1078` Pairing Churn
+- `RULE-107` `T1098` Subagent Fanout
+- `RULE-108` `T1529` Restart Loop
+
+## Repository Data Notes
+
+- BOTSv3 CSVs are tracked via Git LFS (`botsv3_*.csv`).
+- Local OpenClaw findings artifacts are intentionally local-only and ignored:
+  - `data/openclaw/findings/*.json`
+  - `data/openclaw/findings/*.db`
 
 ## Connection to OpenSentinel
 
