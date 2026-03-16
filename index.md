@@ -1,3 +1,8 @@
+---
+title: secopsai
+description: Intelligent attack detection for OpenClaw audit logs.
+---
+
 # secopsai
 
 Intelligent attack detection for OpenClaw audit logs.
