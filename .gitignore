@@ -5,3 +5,5 @@ __pycache__/
 # Local OpenClaw findings artifacts
 data/openclaw/findings/*.json
 data/openclaw/findings/*.db
+findings/*.json
+findings/*.db
