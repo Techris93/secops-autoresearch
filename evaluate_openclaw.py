@@ -8,6 +8,7 @@ synthetic benchmark in evaluate.py.
 Usage:
     python evaluate_openclaw.py
     python evaluate_openclaw.py --verbose
+    python evaluate_openclaw.py --mode live
     python evaluate_openclaw.py --labeled path/to/labeled.json --unlabeled path/to/unlabeled.json
 """
 
@@ -37,6 +38,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate OpenClaw replay data")
     parser.add_argument("--labeled", default=DEFAULT_LABELED, help="Labeled replay JSON file")
     parser.add_argument("--unlabeled", default=DEFAULT_UNLABELED, help="Unlabeled replay JSON file")
+    parser.add_argument(
+        "--mode",
+        default="auto",
+        choices=["auto", "benchmark", "live"],
+        help="Evaluation mode: benchmark uses labels/F1, live emphasizes detections without score gating",
+    )
     parser.add_argument("--verbose", action="store_true", help="Show per-rule breakdown")
     return parser.parse_args()
 
@@ -102,7 +109,14 @@ def attack_type_counts(events: List[Dict[str, Any]]) -> Dict[str, int]:
     return dict(sorted(counter.items()))
 
 
-def print_results(
+def get_effective_mode(requested_mode: str, events: List[Dict[str, Any]]) -> str:
+    if requested_mode != "auto":
+        return requested_mode
+    has_labeled_attacks = any(event.get("label") == "malicious" for event in events)
+    return "benchmark" if has_labeled_attacks else "live"
+
+
+def print_benchmark_results(
     metrics: Dict[str, Any],
     rule_results: Dict[str, List[str]],
     events: List[Dict[str, Any]],
@@ -163,6 +177,55 @@ def print_results(
     print(f"\n>>> OPENCLAW_F1={metrics['f1_score']:.6f} <<<\n")
 
 
+def print_live_results(
+    rule_results: Dict[str, List[str]],
+    events: List[Dict[str, Any]],
+    unlabeled_events: List[Dict[str, Any]],
+    verbose: bool,
+) -> None:
+    detected_set = set()
+    for ids in rule_results.values():
+        detected_set.update(ids)
+
+    detected_events = [event for event in events if event.get("event_id") in detected_set]
+    attack_counter = Counter(str(event.get("attack_type", "none")) for event in detected_events)
+
+    print(f"\n{'═' * 60}")
+    print("  OpenClaw Live Evaluation")
+    print(f"  {datetime.now(tz=None).isoformat()}Z")
+    print(f"{'═' * 60}")
+    print()
+    print("  Mode: live (ground-truth labels unavailable or not trusted)")
+    print(f"  Input events: {len(events)}")
+    print(f"  Detections:   {len(detected_set)}")
+    print(f"  Detection rate: {(len(detected_set) / len(events) * 100.0) if events else 0.0:.2f}%")
+    print(f"  Unlabeled replay events: {len(unlabeled_events)}")
+
+    print("\n  Detected Attack Type Distribution:")
+    if attack_counter:
+        for attack_type, count in sorted(attack_counter.items()):
+            print(f"    {attack_type:28s} {count:5d}")
+    else:
+        print("    none")
+
+    print("\n  Rule Hits:")
+    hit_rules = sorted(((rule_id, len(ids)) for rule_id, ids in rule_results.items() if ids), key=lambda item: (-item[1], item[0]))
+    if hit_rules:
+        for rule_id, count in hit_rules:
+            print(f"    {rule_id:10s} {count:5d}")
+    else:
+        print("    none")
+
+    if verbose and detected_events:
+        print(f"\n  {'─' * 56}")
+        print("  Recent Detected Event IDs:")
+        for event in detected_events[-10:]:
+            print(f"    {event.get('event_id', 'unknown')}")
+
+    print(f"\n{'═' * 60}")
+    print(f"\n>>> OPENCLAW_LIVE_DETECTIONS={len(detected_set)} <<<\n")
+
+
 def main() -> int:
     args = parse_args()
 
@@ -174,8 +237,13 @@ def main() -> int:
         return 1
 
     detection_result = run_detection(labeled_events)
-    metrics = compute_metrics(detection_result["detected_event_ids"], labeled_events)
-    print_results(metrics, detection_result["rule_results"], labeled_events, unlabeled_events, args.verbose)
+    mode = get_effective_mode(args.mode, labeled_events)
+
+    if mode == "benchmark":
+        metrics = compute_metrics(detection_result["detected_event_ids"], labeled_events)
+        print_benchmark_results(metrics, detection_result["rule_results"], labeled_events, unlabeled_events, args.verbose)
+    else:
+        print_live_results(detection_result["rule_results"], labeled_events, unlabeled_events, args.verbose)
     return 0
 
 

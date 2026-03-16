@@ -119,6 +119,16 @@ Score the generated OpenClaw replay bundle directly:
 python evaluate_openclaw.py --verbose
 ```
 
+You can force mode selection when evaluating:
+
+```bash
+# Label-aware benchmark mode (prints F1)
+python evaluate_openclaw.py --mode benchmark
+
+# Live telemetry mode (prints detection-focused summary)
+python evaluate_openclaw.py --mode live
+```
+
 Generate grouped local findings from the replay bundle:
 
 ```bash
@@ -192,6 +202,14 @@ python openclaw_prepare.py --input data/openclaw/raw/audit.jsonl \
 python openclaw_findings.py --input data/openclaw/replay/labeled/current.json
 python soc_store.py list
 ```
+
+Or run the full live local flow in one command:
+
+```bash
+python run_openclaw_live.py
+```
+
+This executes export -> ingest -> normalize -> live evaluate -> findings.
 
 ## Project Structure
 
