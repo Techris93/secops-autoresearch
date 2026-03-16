@@ -106,7 +106,7 @@ Inspired by ByteRover's approach:
    ↓
 4. Answer interactive prompts
    ↓
-5. Setup completes in <2 minutes
+5. Setup completes in under 2 minutes
    ↓
 6. Generate benchmark corpus
    ↓

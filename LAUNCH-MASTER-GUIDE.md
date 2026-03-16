@@ -232,7 +232,7 @@ Mintlify:
 - Sessions (target: 500+ week 1)
 - Pageviews (target: 2,000+ month 1)
 - Time on page (target: >2min getting-started.md)
-- Bounce rate (target: <40%)
+- Bounce rate (target: under 40%)
 ```
 
 ### Social Media
