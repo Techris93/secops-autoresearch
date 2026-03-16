@@ -13,15 +13,27 @@ jobs:
   security:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      security-events: write
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
 
       - name: Run Trivy file/config scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: "fs"
           scan-ref: "."
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
           format: "sarif"
           output: "trivy-fs-results.sarif"
 
@@ -30,6 +42,8 @@ jobs:
         with:
           scan-type: "secret"
           scan-ref: "."
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
           format: "sarif"
           output: "trivy-secret-results.sarif"
 
@@ -38,11 +52,13 @@ jobs:
         with:
           scan-type: "config"
           scan-ref: "."
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
           format: "sarif"
           output: "trivy-config-results.sarif"
 
       - name: Upload Trivy results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: |
@@ -54,7 +70,6 @@ jobs:
         run: |
           pip install pip-audit
           pip-audit --desc
-        continue-on-error: true
 
       - name: OWASP Dependency-Check
         uses: dependency-check/Dependency-Check_Action@main
@@ -66,7 +81,7 @@ jobs:
             --enablePackageAudit
 
       - name: Upload OWASP Dependency-Check results
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: "dependency-check-report.sarif"
@@ -77,24 +92,15 @@ jobs:
           # Badge format: "Security: ✓ Scanned on [date]"
           echo "Last security scan: $(date)" > SECURITY_BADGE.txt
 
-      - name: Check for high-severity issues
-        run: |
-          # Fail the build if Trivy finds high-severity issues
-          if grep -q '"severity":"HIGH"' trivy-fs-results.sarif; then
-            echo "❌ High-severity security issues found!"
-            exit 1
-          fi
-          echo "✓ No high-severity vulnerabilities detected"
-
   dependency-check:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
           cache: "pip"
@@ -104,13 +110,13 @@ jobs:
           pip install safety bandit
 
           # Check for vulnerabilities in Python packages
-          safety check --json --output safety-report.json || true
+          safety check --json --output safety-report.json
 
           # Static security analysis
-          bandit -r . -f json -o bandit-report.json || true
+          bandit -r . -f json -o bandit-report.json
 
       - name: Upload reports
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: security-reports
@@ -124,7 +130,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Check licenses with REUSE
         uses: fsfe/reuse-action@v1
