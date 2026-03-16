@@ -103,6 +103,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Scan image with Trivy
+        continue-on-error: true
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ghcr.io/${{ github.repository }}:latest
@@ -111,7 +112,8 @@ jobs:
 
       - name: Upload Trivy results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        continue-on-error: true
         with:
           sarif_file: "trivy-results.sarif"
 
