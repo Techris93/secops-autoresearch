@@ -1,5 +1,6 @@
 {
   "name": "secopsai",
+  "favicon": "/favicon.svg",
   "theme": "venus",
   "colors": {
     "primary": "#D81B60",
