@@ -12,7 +12,7 @@ import hashlib
 import json
 import os
 from collections import Counter
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from detect import DETECTION_RULES, minutes_between, run_detection
@@ -21,8 +21,17 @@ import soc_store
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_INPUT = os.path.join(ROOT_DIR, "data", "openclaw", "replay", "labeled", "sample_events.json")
-DEFAULT_OUTPUT_DIR = os.path.join(ROOT_DIR, "data", "openclaw", "findings")
-DEFAULT_DB_PATH = os.path.join(DEFAULT_OUTPUT_DIR, "openclaw_soc.db")
+
+
+def default_output_dir() -> str:
+    configured = os.environ.get("SECOPS_FINDINGS_DIR")
+    if configured:
+        return os.path.abspath(configured)
+    return os.path.join(ROOT_DIR, "data", "openclaw", "findings")
+
+
+def default_db_path(output_dir: str) -> str:
+    return os.path.join(output_dir, "openclaw_soc.db")
 
 SEVERITY_SCORES = {
     "info": 10,
@@ -34,10 +43,11 @@ SEVERITY_SCORES = {
 
 
 def parse_args() -> argparse.Namespace:
+    output_dir = default_output_dir()
     parser = argparse.ArgumentParser(description="Generate local OpenClaw findings")
     parser.add_argument("--input", default=DEFAULT_INPUT, help="Replay JSON file to analyze")
-    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory for findings bundle")
-    parser.add_argument("--db-path", default=DEFAULT_DB_PATH, help="SQLite database path for persisted findings")
+    parser.add_argument("--output-dir", default=output_dir, help="Directory for findings bundle")
+    parser.add_argument("--db-path", default=default_db_path(output_dir), help="SQLite database path for persisted findings")
     return parser.parse_args()
 
 
@@ -74,9 +84,11 @@ def severity_label(score: int) -> str:
 
 
 def stable_finding_id(event_ids: List[str], rule_ids: List[str]) -> str:
-    digest = hashlib.sha1(
-        "|".join(sorted(rule_ids) + sorted(event_ids)).encode("utf-8")
-    ).hexdigest()[:16]
+    # Non-cryptographic stable identifier for local finding correlation.
+    digest = hashlib.blake2s(
+        "|".join(sorted(rule_ids) + sorted(event_ids)).encode("utf-8"),
+        digest_size=8,
+    ).hexdigest()
     return f"OCF-{digest.upper()}"
 
 
@@ -95,7 +107,7 @@ def build_candidate_finding(rule: Dict[str, Any], events: List[Dict[str, Any]]) 
         "rule_names": [rule["name"]],
         "mitre": rule["mitre"],
         "mitre_ids": [rule["mitre"]],
-        "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "status": "open",
         "disposition": "unreviewed",
         "title": rule["name"],
@@ -159,7 +171,7 @@ def merge_findings(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
         "rule_names": rule_names,
         "mitre": mitre_ids[0],
         "mitre_ids": mitre_ids,
-        "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "status": "open",
         "disposition": "unreviewed",
         "title": " / ".join(rule_names),
@@ -214,7 +226,7 @@ def build_bundle(source_path: str, events: List[Dict[str, Any]]) -> Dict[str, An
     findings = deduplicate_findings(candidate_findings)
 
     return {
-        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "source": source_path,
         "total_events": len(events),
         "total_detections": result["total_detections"],
@@ -226,7 +238,7 @@ def build_bundle(source_path: str, events: List[Dict[str, Any]]) -> Dict[str, An
 
 def write_bundle(output_dir: str, bundle: Dict[str, Any]) -> str:
     os.makedirs(output_dir, exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     path = os.path.join(output_dir, f"openclaw-findings-{ts}.json")
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(bundle, handle, indent=2)

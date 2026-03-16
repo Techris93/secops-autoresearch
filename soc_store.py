@@ -13,16 +13,25 @@ import json
 import os
 import sqlite3
 from contextlib import closing
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List
 
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DB_PATH = os.path.join(ROOT_DIR, "data", "openclaw", "findings", "openclaw_soc.db")
+
+
+def default_db_path() -> str:
+    findings_dir = os.environ.get("SECOPS_FINDINGS_DIR")
+    if findings_dir:
+        return os.path.join(os.path.abspath(findings_dir), "openclaw_soc.db")
+    return os.path.join(ROOT_DIR, "data", "openclaw", "findings", "openclaw_soc.db")
+
+
+DEFAULT_DB_PATH = default_db_path()
 
 
 def utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def connect(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:

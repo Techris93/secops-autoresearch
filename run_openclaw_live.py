@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
+import subprocess  # nosec B404
 import sys
 from typing import List
 
@@ -37,8 +37,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def run_step(args: List[str]) -> None:
+    if not args or args[0] != sys.executable:
+        raise ValueError("run_step only allows invoking the current Python interpreter")
     print("\n$ " + " ".join(args))
-    subprocess.run(args, cwd=ROOT_DIR, check=True)
+    subprocess.run(args, cwd=ROOT_DIR, check=True, timeout=120)  # nosec B603
 
 
 def main() -> int:

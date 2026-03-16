@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://local.secops-autoresearch/schemas/normalized_event.schema.json",
+  "$id": "https://local.secopsai/schemas/normalized_event.schema.json",
   "title": "Normalized Detection Event",
   "description": "Canonical detector-facing event schema derived from OpenClaw adapter events and other benchmark sources.",
   "type": "object",

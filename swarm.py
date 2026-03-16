@@ -14,13 +14,15 @@ Usage:
 
 import os
 import json
-import subprocess
+import subprocess  # nosec B404
 import argparse
+import shutil
 from datetime import datetime
 from typing import List, Dict, Optional
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(REPO_DIR, "data")
+GIT_EXECUTABLE = shutil.which("git")
 
 # Research directions agents can explore
 RESEARCH_DIRECTIONS = [
@@ -71,11 +73,13 @@ RESEARCH_DIRECTIONS = [
 
 def git(args: List[str], check: bool = True) -> subprocess.CompletedProcess:
     """Run a git command in the repo directory."""
+    if not GIT_EXECUTABLE:
+        raise RuntimeError("git executable not found in PATH")
     return subprocess.run(
-        ["git"] + args,
+        [GIT_EXECUTABLE] + args,
         capture_output=True, text=True,
-        cwd=REPO_DIR, check=check
-    )
+        cwd=REPO_DIR, check=check, timeout=20
+    )  # nosec B603
 
 
 def get_current_branch() -> str:

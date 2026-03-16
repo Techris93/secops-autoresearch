@@ -1,0 +1,85 @@
+services:
+  secopsai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: secopsai
+
+    # Environment variables
+    environment:
+      - SECOPS_ENV=production
+      - SECOPS_FINDINGS_DIR=/opt/secopsai/findings
+      - SECOPS_POLL_INTERVAL_SECONDS=300
+      - TZ=UTC
+
+    # Volume mounts
+    volumes:
+      # OpenClaw audit logs (read-only)
+      - ~/.openclaw:/home/secops/.openclaw:ro
+
+      # Output findings (writable)
+      - ./findings:/opt/secopsai/findings
+      - ./data:/opt/secopsai/data
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Logging configuration
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "service=secopsai"
+
+    # Health check
+    healthcheck:
+      test:
+        ["CMD", "python", "-c", "from detect import run_detection; print('ok')"]
+      interval: 5m
+      timeout: 1m
+      retries: 3
+      start_period: 1m
+
+  # Optional: Splunk HEC receiver for findings (if using Splunk)
+  # splunk-hec:
+  #   image: splunk/splunk:latest
+  #   environment:
+  #     SPLUNK_PASSWORD: changeme
+  #     SPLUNK_START_ARGS: --accept-license
+  #   ports:
+  #     - "8088:8088"
+  #   volumes:
+  #     - ./splunk_data:/opt/splunk/var
+
+  # Optional: Elasticsearch for ELK stack integration
+  # elasticsearch:
+  #   image: docker.elastic.co/elasticsearch/elasticsearch:8.0.0
+  #   environment:
+  #     - xpack.security.enabled=false
+  #     - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+  #   ports:
+  #     - "9200:9200"
+  #   volumes:
+  #     - ./es_data:/usr/share/elasticsearch/data
+
+volumes:
+  findings:
+    driver: local
+  data:
+    driver: local
+
+networks:
+  default:
+    name: secops-network
+    driver: bridge

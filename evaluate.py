@@ -14,8 +14,9 @@ Usage:
 import json
 import os
 import sys
-import subprocess
+import subprocess  # nosec B404
 import argparse
+import shutil
 from datetime import datetime
 from typing import Dict, Any, List, Tuple
 
@@ -35,6 +36,8 @@ EXPERIMENT_LOG = os.path.join(DATA_DIR, "experiments.log")
 
 # Experiment time budget (informational — the overhead is in the agent's loop)
 EXPERIMENT_BUDGET_SECONDS = 300
+
+GIT_EXECUTABLE = shutil.which("git")
 
 
 # ═══ Metrics ═════════════════════════════════════════════════════════════════
@@ -194,27 +197,32 @@ def git_commit_improvement(metrics: Dict[str, Any], previous_best: float):
     """Commit detect.py to git if F1 improved."""
     improvement = metrics["f1_score"] - previous_best
 
+    if not GIT_EXECUTABLE:
+        print("\n  ⚠️  Git executable not found in PATH")
+        return False
+
+    def run_git(args: List[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [GIT_EXECUTABLE, *args],
+            capture_output=True,
+            text=True,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            check=True,
+            timeout=15,
+        )  # nosec B603
+
     try:
         # Ensure we're on a feature branch
-        branch = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, cwd=os.path.dirname(os.path.abspath(__file__))
-        ).stdout.strip()
+        branch = run_git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
 
         if branch in ("main", "master"):
             # Create experiment branch
             branch_name = f"experiment/{datetime.now(tz=None).strftime('%Y%m%d-%H%M%S')}"
-            subprocess.run(
-                ["git", "checkout", "-b", branch_name],
-                cwd=os.path.dirname(os.path.abspath(__file__))
-            )
+            run_git(["checkout", "-b", branch_name])
             print(f"  Created branch: {branch_name}")
 
         # Stage and commit detect.py
-        subprocess.run(
-            ["git", "add", "detect.py"],
-            cwd=os.path.dirname(os.path.abspath(__file__))
-        )
+        run_git(["add", "detect.py"])
 
         commit_msg = (
             f"feat(detect): F1={metrics['f1_score']:.4f} "
@@ -223,15 +231,12 @@ def git_commit_improvement(metrics: Dict[str, Any], previous_best: float):
             f"FPR={metrics['false_positive_rate']:.4f}"
         )
 
-        subprocess.run(
-            ["git", "commit", "-m", commit_msg],
-            cwd=os.path.dirname(os.path.abspath(__file__))
-        )
+        run_git(["commit", "-m", commit_msg])
 
         print(f"\n  ✅ Committed: {commit_msg}")
         return True
 
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
         print(f"\n  ⚠️  Git commit failed: {e}")
         return False
 

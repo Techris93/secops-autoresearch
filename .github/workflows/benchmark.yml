@@ -1,0 +1,105 @@
+name: Detection Benchmark
+
+on:
+  schedule:
+    # Run benchmark daily at 9 AM UTC
+    - cron: "0 9 * * *"
+
+  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+
+  # Run on push to main (validate changes)
+  push:
+    branches: [main]
+    paths:
+      - "detect.py"
+      - "generate_openclaw_attack_mix.py"
+      - "evaluate.py"
+      - ".github/workflows/benchmark.yml"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate attack-mix benchmark
+        run: python generate_openclaw_attack_mix.py --stats
+
+      - name: Run detection benchmark
+        run: |
+          python evaluate.py \
+            --labeled data/openclaw/replay/labeled/attack_mix.json \
+            --unlabeled data/openclaw/replay/unlabeled/attack_mix.json \
+            --mode benchmark \
+            --verbose \
+            | tee benchmark-results.txt
+
+      - name: Check F1 Score
+        run: |
+          f1=$(grep "F1 Score:" benchmark-results.txt | awk '{print $NF}')
+          echo "F1 Score: $f1"
+
+          # Fail if F1 < 0.95
+          if (( $(echo "$f1 < 0.95" | bc -l) )); then
+            echo "❌ F1 score degraded below 0.95!"
+            exit 1
+          fi
+          echo "✓ F1 score acceptable: $f1"
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: benchmark-results
+          path: |
+            benchmark-results.txt
+            data/openclaw/replay/
+          retention-days: 30
+
+      - name: Comment on PR (if PR)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const results = fs.readFileSync('benchmark-results.txt', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '## Benchmark Results\n```\n' + results + '\n```'
+            });
+
+      - name: Notify Slack (if benchmark fails)
+        if: failure()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "🚨 Detection benchmark failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Benchmark Failed*\nRepository: ${{ github.repository }}\nBranch: ${{ github.ref }}\nCommit: ${{ github.sha }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

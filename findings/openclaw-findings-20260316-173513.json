@@ -1,0 +1,9 @@
+{
+  "generated_at": "2026-03-16T17:35:13.512848Z",
+  "source": "/opt/secopsai/data/openclaw/replay/labeled/current.json",
+  "total_events": 72,
+  "total_detections": 0,
+  "total_candidate_findings": 0,
+  "total_findings": 0,
+  "findings": []
+}

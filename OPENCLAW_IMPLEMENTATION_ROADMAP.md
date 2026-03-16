@@ -404,4 +404,4 @@ Start with these three deliverables first:
 2. `openclaw_prepare.py`
 3. `evaluate_openclaw.py`
 
-That is the smallest useful foundation that keeps this aligned with secops-autoresearch rather than turning into an unfocused platform build.
+That is the smallest useful foundation that keeps this aligned with secopsai rather than turning into an unfocused platform build.

@@ -99,18 +99,18 @@ class FindingsPublisherTests(unittest.TestCase):
         remote_result = subprocess.CompletedProcess(
             args=["git", "remote", "get-url", "origin"],
             returncode=0,
-            stdout="git@github.com:example/secops-autoresearch.git\n",
+            stdout="git@github.com:example/secopsai.git\n",
             stderr="",
         )
 
         with mock.patch.object(findings.subprocess, "run", return_value=remote_result):
-            self.assertEqual(findings.detect_github_repo(), "example/secops-autoresearch")
+            self.assertEqual(findings.detect_github_repo(), "example/secopsai")
 
     def test_publish_to_github_issue_uses_gh_cli_without_overriding_env(self):
         issue_result = subprocess.CompletedProcess(
             args=["gh", "issue", "create"],
             returncode=0,
-            stdout="https://github.com/example/secops-autoresearch/issues/1\n",
+            stdout="https://github.com/example/secopsai/issues/1\n",
             stderr="",
         )
         finding = findings.create_finding(
@@ -123,7 +123,7 @@ class FindingsPublisherTests(unittest.TestCase):
             insights=["Low-volume beaconing is separable by payload size"],
         )
 
-        with mock.patch.object(findings, "detect_github_repo", return_value="example/secops-autoresearch"), \
+        with mock.patch.object(findings, "detect_github_repo", return_value="example/secopsai"), \
              mock.patch.object(findings.subprocess, "run", return_value=issue_result) as run_mock:
             published = findings.publish_to_github_issue(finding)
 

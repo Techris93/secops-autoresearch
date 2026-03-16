@@ -14,7 +14,7 @@ import hashlib
 import json
 import os
 from collections import Counter
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Tuple
 
 
@@ -91,7 +91,7 @@ def normalize_timestamp(value: str) -> str:
     if normalized.endswith("Z"):
         normalized = normalized[:-1] + "+00:00"
     dt = datetime.fromisoformat(normalized)
-    return dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def validate_enum(value: Any, allowed: Iterable[str], label: str) -> None:
@@ -193,8 +193,9 @@ def make_event_id(record: Dict[str, Any]) -> str:
     if isinstance(record_id, str) and record_id.strip():
         return record_id.strip()
 
-    digest = hashlib.sha1(
-        json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    digest = hashlib.blake2s(
+        json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+        digest_size=8,
     ).hexdigest()
     return f"OC-{digest[:12].upper()}"
 

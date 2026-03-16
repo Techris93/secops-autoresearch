@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://local.secops-autoresearch/schemas/openclaw_audit.schema.json",
+  "$id": "https://local.secopsai/schemas/openclaw_audit.schema.json",
   "title": "OpenClaw SOC Adapter Event",
   "description": "Adapter-facing raw event envelope collected from verified OpenClaw native surfaces. This is not an assertion that upstream OpenClaw emits one unified SOC audit bus natively.",
   "type": "object",

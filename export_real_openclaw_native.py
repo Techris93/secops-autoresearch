@@ -13,7 +13,6 @@ SESSION_GLOB = os.path.expanduser("~/.openclaw/agents/main/sessions/*.jsonl")
 CONFIG_AUDIT_FILE = Path(os.path.expanduser("~/.openclaw/logs/config-audit.jsonl"))
 GATEWAY_LOG_FILES = [
     Path(os.path.expanduser("~/.openclaw/logs/gateway.log")),
-    Path("/tmp/openclaw/openclaw-2026-03-16.log"),
 ]
 EXEC_TOOL_NAMES = {"exec", "run_in_terminal", "execute_command", "shell", "bash", "sh"}
 MUTATING_TOOL_NAMES = {

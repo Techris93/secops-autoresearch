@@ -654,7 +654,7 @@ NOISY_BENIGN_GENERATORS = [
 
 def generate_dataset() -> list:
     """Generate the full labeled dataset."""
-    rng = random.Random(SEED)
+    rng = random.Random(SEED)  # nosec B311
     base_time = datetime(2026, 3, 1, 0, 0, 0)
     all_events = []
 

@@ -17,13 +17,18 @@ Usage:
 
 import json
 import os
-import subprocess
+import subprocess  # nosec B404
+import shutil
+import re
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 FINDINGS_DIR = os.path.join(DATA_DIR, "findings")
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+GIT_EXECUTABLE = shutil.which("git")
+GH_EXECUTABLE = shutil.which("gh")
+REPO_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 # ═══ Data Structure ══════════════════════════════════════════════════════════
@@ -182,14 +187,18 @@ def summarize_for_agent(limit: int = 10) -> str:
 
 def detect_github_repo() -> str:
     """Infer owner/repo from the current origin remote."""
+    if not GIT_EXECUTABLE:
+        return ""
+
     try:
         result = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
+            [GIT_EXECUTABLE, "remote", "get-url", "origin"],
             capture_output=True,
             text=True,
             cwd=REPO_DIR,
             check=False,
-        )
+            timeout=10,
+        )  # nosec B603
     except (OSError, subprocess.SubprocessError):
         return ""
 
@@ -239,6 +248,12 @@ def publish_to_github_issue(finding: Dict[str, Any], repo: str = "") -> bool:
     if not repo:
         print("  ⚠️  Could not detect GitHub repo. Skipping GitHub publish.")
         return False
+    if not GH_EXECUTABLE:
+        print("  ⚠️  GitHub CLI not found. Skipping GitHub publish.")
+        return False
+    if not REPO_SLUG_PATTERN.match(repo):
+        print("  ⚠️  Invalid repo format. Expected owner/repo.")
+        return False
 
     title = (
         f"🔬 Finding: F1={finding['f1_score']:.4f} "
@@ -257,7 +272,8 @@ def publish_to_github_issue(finding: Dict[str, Any], repo: str = "") -> bool:
             text=True,
             cwd=REPO_DIR,
             check=False,
-        )
+            timeout=20,
+        )  # nosec B603
         if result.returncode == 0:
             print(f"  🌐 Published to GitHub Issues: {result.stdout.strip()}")
             return True

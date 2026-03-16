@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Sequence
 
 
@@ -61,7 +61,7 @@ def normalize_timestamp(value: Any) -> str:
     if normalized.endswith("Z"):
         normalized = normalized[:-1] + "+00:00"
     dt = datetime.fromisoformat(normalized)
-    return dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def normalize_status(value: Any, default: str) -> str:

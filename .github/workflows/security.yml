@@ -1,0 +1,137 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run security scan weekly
+    - cron: "0 0 * * 0"
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Run Trivy file/config scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "sarif"
+          output: "trivy-fs-results.sarif"
+
+      - name: Run Trivy secret scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "secret"
+          scan-ref: "."
+          format: "sarif"
+          output: "trivy-secret-results.sarif"
+
+      - name: Run Trivy dependency scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "config"
+          scan-ref: "."
+          format: "sarif"
+          output: "trivy-config-results.sarif"
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: |
+            trivy-fs-results.sarif
+            trivy-secret-results.sarif
+            trivy-config-results.sarif
+
+      - name: Run pip-audit (dependency vulnerabilities)
+        run: |
+          pip install pip-audit
+          pip-audit --desc
+        continue-on-error: true
+
+      - name: OWASP Dependency-Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: "secopsai"
+          path: "."
+          format: "SARIF"
+          args: >
+            --enablePackageAudit
+
+      - name: Upload OWASP Dependency-Check results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: "dependency-check-report.sarif"
+
+      - name: Create security badge
+        run: |
+          # This creates a simple status file that can be displayed in README
+          # Badge format: "Security: ✓ Scanned on [date]"
+          echo "Last security scan: $(date)" > SECURITY_BADGE.txt
+
+      - name: Check for high-severity issues
+        run: |
+          # Fail the build if Trivy finds high-severity issues
+          if grep -q '"severity":"HIGH"' trivy-fs-results.sarif; then
+            echo "❌ High-severity security issues found!"
+            exit 1
+          fi
+          echo "✓ No high-severity vulnerabilities detected"
+
+  dependency-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Check for vulnerable dependencies
+        run: |
+          pip install safety bandit
+
+          # Check for vulnerabilities in Python packages
+          safety check --json --output safety-report.json || true
+
+          # Static security analysis
+          bandit -r . -f json -o bandit-report.json || true
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: security-reports
+          path: |
+            safety-report.json
+            bandit-report.json
+          retention-days: 30
+
+  license-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Check licenses with REUSE
+        uses: fsfe/reuse-action@v1
+        continue-on-error: true
+
+      - name: License compliance report
+        run: |
+          pip install pip-licenses
+          pip-licenses --format=csv --output-file=licenses.csv
+          pip-licenses --format=plain

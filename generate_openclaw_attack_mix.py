@@ -12,7 +12,7 @@ import argparse
 import copy
 import json
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List
 
 import openclaw_prepare
@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def _iso(dt: datetime) -> str:
-    return dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _load_base_records(path: str) -> List[Dict[str, Any]]:
@@ -75,7 +75,7 @@ def _max_timestamp(records: Iterable[Dict[str, Any]]) -> datetime:
     latest = None
     for record in records:
         latest = max(latest, datetime.fromisoformat(str(record["ts"]).replace("Z", "+00:00"))) if latest else datetime.fromisoformat(str(record["ts"]).replace("Z", "+00:00"))
-    return latest or datetime.now(UTC)
+    return latest or datetime.now(timezone.utc)
 
 
 def _record(
