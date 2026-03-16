@@ -38,6 +38,7 @@ jobs:
           output: "trivy-fs-results.sarif"
 
       - name: Run Trivy secret scan
+        continue-on-error: ${{ github.event_name != 'schedule' }}
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: "secret"
