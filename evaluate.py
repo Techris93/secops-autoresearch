@@ -18,7 +18,7 @@ import subprocess  # nosec B404
 import argparse
 import shutil
 from datetime import datetime
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -112,7 +112,7 @@ def print_results(metrics: Dict[str, Any], rule_results: Dict = None,
     """Print evaluation results in a clear format."""
 
     print(f"\n{'═' * 60}")
-    print(f"  SecOps Autoresearch — Experiment Results")
+    print("  SecOps Autoresearch — Experiment Results")
     print(f"  {datetime.now(tz=None).isoformat()}Z")
     print(f"{'═' * 60}")
     print()
@@ -129,7 +129,7 @@ def print_results(metrics: Dict[str, Any], rule_results: Dict = None,
 
     if verbose and rule_results and events:
         print(f"  {'─' * 56}")
-        print(f"  Per-Rule Breakdown:")
+        print("  Per-Rule Breakdown:")
         print(f"  {'─' * 56}")
 
         per_rule = compute_per_rule_metrics(rule_results, events)
@@ -153,9 +153,24 @@ def print_results(metrics: Dict[str, Any], rule_results: Dict = None,
                 at = e.get("attack_type", "unknown")
                 missed_types[at] = missed_types.get(at, 0) + 1
             print(f"\n  {'─' * 56}")
-            print(f"  Missed attack events by type:")
+            print("  Missed attack events by type:")
             for at, count in sorted(missed_types.items(), key=lambda x: -x[1]):
                 print(f"    {at:30s} {count:5d} missed")
+
+        # Explain detected events and print a Markdown summary
+        try:
+            from explain import explain_all, write_explanations, format_markdown
+            explanations = explain_all(events, rule_results)
+            write_explanations(explanations)
+            md = format_markdown(explanations, max_rows=20)
+            if md:
+                print(f"\n  {'─' * 56}")
+                print("  Detection Explanations (top 20):")
+                print()
+                for line in md.splitlines():
+                    print(f"  {line}")
+        except (ImportError, AttributeError, KeyError, TypeError, ValueError) as _explain_err:
+            print(f"\n  [explain.py] skipped: {_explain_err}")
 
     print(f"\n{'═' * 60}")
 
@@ -168,7 +183,7 @@ def print_results(metrics: Dict[str, Any], rule_results: Dict = None,
 def get_best_score() -> float:
     """Get the best F1 score recorded so far."""
     if os.path.exists(BEST_SCORE_FILE):
-        with open(BEST_SCORE_FILE, "r") as f:
+        with open(BEST_SCORE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             return data.get("f1_score", 0.0)
     return 0.0
@@ -177,7 +192,7 @@ def get_best_score() -> float:
 def save_best_score(metrics: Dict[str, Any]):
     """Save new best score."""
     metrics["timestamp"] = datetime.now(tz=None).isoformat() + "Z"
-    with open(BEST_SCORE_FILE, "w") as f:
+    with open(BEST_SCORE_FILE, "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
 
@@ -191,7 +206,7 @@ def log_experiment(metrics: Dict[str, Any], committed: bool):
         "fpr": metrics["false_positive_rate"],
         "committed": committed,
     }
-    with open(EXPERIMENT_LOG, "a") as f:
+    with open(EXPERIMENT_LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
 
 
@@ -215,11 +230,11 @@ def save_per_rule_metrics(
         "rules": per_rule,
     }
 
-    with open(PER_RULE_METRICS_FILE, "w") as f:
+    with open(PER_RULE_METRICS_FILE, "w", encoding="utf-8") as f:
         json.dump(snapshot, f, indent=2)
 
     history_entry = {"timestamp": ts, "rules": per_rule}
-    with open(RULE_METRICS_HISTORY_FILE, "a") as f:
+    with open(RULE_METRICS_HISTORY_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(history_entry) + "\n")
 
     return per_rule
@@ -342,7 +357,7 @@ def main():
         else:
             print(f"  📉 No improvement. Current: {metrics['f1_score']:.6f}, "
                   f"Best: {previous_best:.6f}")
-            print(f"  Discarding changes. Try a different approach.")
+            print("  Discarding changes. Try a different approach.")
 
     elif improved or previous_best == 0.0:
         save_best_score(metrics)
