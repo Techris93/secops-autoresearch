@@ -33,6 +33,8 @@ EVENTS_FILE = os.path.join(DATA_DIR, "events.json")
 UNLABELED_FILE = os.path.join(DATA_DIR, "events_unlabeled.json")
 BEST_SCORE_FILE = os.path.join(DATA_DIR, "best.json")
 EXPERIMENT_LOG = os.path.join(DATA_DIR, "experiments.log")
+PER_RULE_METRICS_FILE = os.path.join(DATA_DIR, "per_rule_metrics.json")
+RULE_METRICS_HISTORY_FILE = os.path.join(DATA_DIR, "rule_metrics_history.jsonl")
 
 # Experiment time budget (informational — the overhead is in the agent's loop)
 EXPERIMENT_BUDGET_SECONDS = 300
@@ -193,6 +195,36 @@ def log_experiment(metrics: Dict[str, Any], committed: bool):
         f.write(json.dumps(entry) + "\n")
 
 
+def save_per_rule_metrics(
+    rule_results: Dict[str, List[str]],
+    events: List[Dict],
+    overall_metrics: Dict[str, Any],
+) -> Dict[str, Dict]:
+    """Compute, persist, and return per-rule metrics.
+
+    Writes two files:
+    - data/per_rule_metrics.json  — latest snapshot (overwritten each run)
+    - data/rule_metrics_history.jsonl — append-only audit trail
+    """
+    per_rule = compute_per_rule_metrics(rule_results, events)
+    ts = datetime.now(tz=None).isoformat() + "Z"
+
+    snapshot = {
+        "timestamp": ts,
+        "overall": overall_metrics,
+        "rules": per_rule,
+    }
+
+    with open(PER_RULE_METRICS_FILE, "w") as f:
+        json.dump(snapshot, f, indent=2)
+
+    history_entry = {"timestamp": ts, "rules": per_rule}
+    with open(RULE_METRICS_HISTORY_FILE, "a") as f:
+        f.write(json.dumps(history_entry) + "\n")
+
+    return per_rule
+
+
 def git_commit_improvement(metrics: Dict[str, Any], previous_best: float):
     """Commit detect.py to git if F1 improved."""
     improvement = metrics["f1_score"] - previous_best
@@ -288,6 +320,14 @@ def main():
         events=labeled_events,
         verbose=args.verbose,
     )
+
+    # Always persist per-rule metrics for CI regression checks and tune.py
+    if results.get("rule_results"):
+        save_per_rule_metrics(
+            results["rule_results"],
+            labeled_events,
+            metrics,
+        )
 
     # Handle git integration
     previous_best = get_best_score()

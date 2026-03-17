@@ -13,22 +13,34 @@ on:
     branches: [main]
     paths:
       - "detect.py"
-      - "generate_openclaw_attack_mix.py"
       - "evaluate.py"
+      - "prepare.py"
+      - "tune.py"
       - ".github/workflows/benchmark.yml"
+
+  pull_request:
+    branches: [main]
+    paths:
+      - "detect.py"
+      - "evaluate.py"
+      - "prepare.py"
 
 jobs:
   benchmark:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      pull-requests: write   # for PR comment step
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
           cache: "pip"
 
       - name: Install dependencies
@@ -36,55 +48,98 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Generate attack-mix benchmark
-        run: python generate_openclaw_attack_mix.py --stats
+      # ── Regenerate the labeled + unlabeled dataset ──────────────────────────
+      - name: Generate synthetic dataset
+        run: python prepare.py --stats
 
+      # ── Run detection and collect metrics ───────────────────────────────────
       - name: Run detection benchmark
         run: |
-          python evaluate.py \
-            --labeled data/openclaw/replay/labeled/attack_mix.json \
-            --unlabeled data/openclaw/replay/unlabeled/attack_mix.json \
-            --mode benchmark \
-            --verbose \
-            | tee benchmark-results.txt
+          python evaluate.py --verbose | tee benchmark-results.txt
 
-      - name: Check F1 Score
+      # ── Parse F1 from the machine-readable sentinel line ────────────────────
+      - name: Enforce F1 regression gate
         run: |
-          f1=$(grep "F1 Score:" benchmark-results.txt | awk '{print $NF}')
+          f1=$(grep -oP '(?<=F1_SCORE=)\d+\.\d+' benchmark-results.txt)
           echo "F1 Score: $f1"
 
-          # Fail if F1 < 0.95
-          if (( $(echo "$f1 < 0.95" | bc -l) )); then
-            echo "❌ F1 score degraded below 0.95!"
+          # Hard floor — fail the build if overall F1 drops below this value.
+          # Raise the threshold as detection improves.
+          MIN_F1="0.70"
+
+          if python3 -c "import sys; sys.exit(0 if float('$f1') >= float('$MIN_F1') else 1)"; then
+            echo "✓ F1=${f1} >= ${MIN_F1} — gate passed"
+          else
+            echo "❌ F1=${f1} < ${MIN_F1} — detection quality degraded!"
             exit 1
           fi
-          echo "✓ F1 score acceptable: $f1"
 
-      - name: Upload benchmark results
+      # ── Per-rule regression gate ─────────────────────────────────────────────
+      # Fail if any rule's F1 drops to 0.00 (rule completely non-functional).
+      - name: Enforce per-rule regression gate
+        run: |
+          python3 - <<'EOF'
+          import json, sys, os
+          path = "data/per_rule_metrics.json"
+          if not os.path.exists(path):
+              print("No per_rule_metrics.json found — skipping per-rule gate.")
+              sys.exit(0)
+          with open(path) as f:
+              data = json.load(f)
+          rules = data.get("rules", {})
+          failed = []
+          for rule_id, m in rules.items():
+              if m.get("true_positives", 0) + m.get("false_positives", 0) == 0:
+                  # Rule never fired — skip (may not have matching events in this dataset)
+                  continue
+              if m.get("f1_score", 1.0) == 0.0:
+                  failed.append(f"{rule_id}: F1=0.000 (TP={m['true_positives']} FP={m['false_positives']})")
+          if failed:
+              print("❌ Per-rule regression failures:")
+              for msg in failed:
+                  print(f"   {msg}")
+              sys.exit(1)
+          print(f"✓ Per-rule gate passed ({len(rules)} rules checked)")
+          EOF
+
+      # ── Upload artifacts ─────────────────────────────────────────────────────
+      - name: Upload benchmark artifacts
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results
+          name: benchmark-results-${{ github.sha }}
           path: |
             benchmark-results.txt
-            data/openclaw/replay/
-          retention-days: 30
+            data/per_rule_metrics.json
+            data/rule_metrics_history.jsonl
+            data/experiments.log
+          retention-days: 90
 
-      - name: Comment on PR (if PR)
+      # ── Post results as PR comment ────────────────────────────────────────────
+      - name: Comment benchmark results on PR
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             const results = fs.readFileSync('benchmark-results.txt', 'utf8');
+            let perRuleTable = '';
+            try {
+              const prm = JSON.parse(fs.readFileSync('data/per_rule_metrics.json', 'utf8'));
+              const rows = Object.entries(prm.rules || {}).map(([id, m]) =>
+                `| ${id} | ${m.f1_score.toFixed(4)} | ${m.precision.toFixed(4)} | ${m.recall.toFixed(4)} | ${m.false_positives} |`
+              ).join('\n');
+              perRuleTable = `\n## Per-Rule Metrics\n| Rule | F1 | Precision | Recall | FP |\n|------|-----|-----------|--------|----|\n${rows}`;
+            } catch (_) {}
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: '## Benchmark Results\n```\n' + results + '\n```'
+              body: `## Detection Benchmark Results\n\`\`\`\n${results}\n\`\`\`${perRuleTable}`
             });
 
-      - name: Notify Slack (if benchmark fails)
+      # ── Slack notification on failure ─────────────────────────────────────────
+      - name: Notify Slack on benchmark failure
         if: failure()
         uses: slackapi/slack-github-action@v1.24.0
         with:

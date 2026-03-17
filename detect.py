@@ -46,6 +46,40 @@ FILELESS_PATTERNS = {
     "cscript.exe": [r"\\users\\public\\", r"https?://", r"\.vbs\b"],
 }
 
+# ═══ Tunable Rule Thresholds ═════════════════════════════════════════════════
+# tune.py patches this dict at runtime to sweep the parameter space.
+# The agent may also modify individual values when optimizing detect.py.
+
+RULE_THRESHOLDS: dict = {
+    "brute_force": {
+        "RAPID_THRESHOLD": 6,
+        "RAPID_WINDOW_MINUTES": 10,
+        "SLOW_THRESHOLD": 3,
+        "SLOW_MIN_SPAN_MINUTES": 30,
+        "COMPROMISE_WINDOW_MINUTES": 20,
+        "SOURCELESS_THRESHOLD": 8,
+    },
+    "dns_exfiltration": {
+        "MIN_QUERIES_PER_DOMAIN": 5,
+        "MIN_LABEL_LENGTH": 15,
+        "MIN_ENTROPY": 3.0,
+        "MIN_UNIQUE_LABEL_RATIO": 0.8,
+        "FALLBACK_LABEL_LENGTH": 20,
+        "FALLBACK_UNIQUE_RATIO": 0.7,
+    },
+    "c2_beaconing": {
+        "MIN_CONNECTIONS": 5,
+        "MAX_BYTES_OUT": 600,
+        "MAX_BYTES_IN": 250,
+    },
+    "lateral_movement": {
+        "UNIQUE_DEST_THRESHOLD": 4,
+        "WINDOW_MINUTES": 20,
+        "MAX_AVERAGE_GAP_SECONDS": 240,
+        "MAX_TRANSFER_BYTES": 100000,
+    },
+}
+
 
 def parse_timestamp(timestamp: str) -> datetime:
     normalized = timestamp[:-1] if timestamp.endswith("Z") else timestamp
@@ -163,12 +197,13 @@ def detect_brute_force(events: List[Dict]) -> List[str]:
     T1110 — Brute Force Detection
     Detects multiple failed login attempts from a single source IP.
     """
-    RAPID_THRESHOLD = 6
-    RAPID_WINDOW_MINUTES = 10
-    SLOW_THRESHOLD = 3
-    SLOW_MIN_SPAN_MINUTES = 30
-    COMPROMISE_WINDOW_MINUTES = 20
-    SOURCELESS_THRESHOLD = 8
+    _t = RULE_THRESHOLDS["brute_force"]
+    RAPID_THRESHOLD = _t["RAPID_THRESHOLD"]
+    RAPID_WINDOW_MINUTES = _t["RAPID_WINDOW_MINUTES"]
+    SLOW_THRESHOLD = _t["SLOW_THRESHOLD"]
+    SLOW_MIN_SPAN_MINUTES = _t["SLOW_MIN_SPAN_MINUTES"]
+    COMPROMISE_WINDOW_MINUTES = _t["COMPROMISE_WINDOW_MINUTES"]
+    SOURCELESS_THRESHOLD = _t["SOURCELESS_THRESHOLD"]
 
     failures_by_actor: Dict[tuple[str, str], List[Dict]] = defaultdict(list)
     successes_by_actor: Dict[tuple[str, str], List[Dict]] = defaultdict(list)
@@ -229,12 +264,13 @@ def detect_dns_exfiltration(events: List[Dict]) -> List[str]:
     T1048.003 — DNS Exfiltration
     Detects unusually long DNS queries indicating data exfiltration.
     """
-    MIN_QUERIES_PER_DOMAIN = 5
-    MIN_LABEL_LENGTH = 15
-    MIN_ENTROPY = 3.0
-    MIN_UNIQUE_LABEL_RATIO = 0.8
-    FALLBACK_LABEL_LENGTH = 20
-    FALLBACK_UNIQUE_RATIO = 0.7
+    _t = RULE_THRESHOLDS["dns_exfiltration"]
+    MIN_QUERIES_PER_DOMAIN = _t["MIN_QUERIES_PER_DOMAIN"]
+    MIN_LABEL_LENGTH = _t["MIN_LABEL_LENGTH"]
+    MIN_ENTROPY = _t["MIN_ENTROPY"]
+    MIN_UNIQUE_LABEL_RATIO = _t["MIN_UNIQUE_LABEL_RATIO"]
+    FALLBACK_LABEL_LENGTH = _t["FALLBACK_LABEL_LENGTH"]
+    FALLBACK_UNIQUE_RATIO = _t["FALLBACK_UNIQUE_RATIO"]
 
     queries_by_src_and_domain: Dict[tuple[str, str], List[Dict]] = defaultdict(list)
     for event in events:
@@ -278,9 +314,10 @@ def detect_c2_beaconing(events: List[Dict]) -> List[str]:
     T1071 — C2 Beaconing
     Detects periodic outbound connections to the same destination.
     """
-    MIN_CONNECTIONS = 5
-    MAX_BYTES_OUT = 600
-    MAX_BYTES_IN = 250
+    _t = RULE_THRESHOLDS["c2_beaconing"]
+    MIN_CONNECTIONS = _t["MIN_CONNECTIONS"]
+    MAX_BYTES_OUT = _t["MAX_BYTES_OUT"]
+    MAX_BYTES_IN = _t["MAX_BYTES_IN"]
     SUSPICIOUS_PORTS = {11211, 4444, 1080, 9001, 9030, 6667, 6697}
 
     connections: Dict[str, List[Dict]] = defaultdict(list)
@@ -322,10 +359,11 @@ def detect_lateral_movement(events: List[Dict]) -> List[str]:
     T1021.002 — Lateral Movement via SMB
     Detects a single IP connecting to multiple internal hosts on port 445.
     """
-    UNIQUE_DEST_THRESHOLD = 4
-    WINDOW_MINUTES = 20
-    MAX_AVERAGE_GAP_SECONDS = 240
-    MAX_TRANSFER_BYTES = 100000
+    _t = RULE_THRESHOLDS["lateral_movement"]
+    UNIQUE_DEST_THRESHOLD = _t["UNIQUE_DEST_THRESHOLD"]
+    WINDOW_MINUTES = _t["WINDOW_MINUTES"]
+    MAX_AVERAGE_GAP_SECONDS = _t["MAX_AVERAGE_GAP_SECONDS"]
+    MAX_TRANSFER_BYTES = _t["MAX_TRANSFER_BYTES"]
 
     smb_by_src: Dict[str, Dict[str, List[Dict]]] = defaultdict(lambda: defaultdict(list))
     detected = set()

@@ -528,6 +528,144 @@ def _gen_chatty_service(base_time: datetime, rng: random.Random) -> list:
     return events
 
 
+# ═══ HARD NEGATIVE benign events (strongly resemble attacks) ══════════════════════
+# These are BENIGN but are designed to closely mimic attack signatures.
+# They expose blind-spots in rules that rely solely on surface-level thresholds.
+
+def _gen_hard_neg_ci_auth(base_time: datetime, rng: random.Random) -> list:
+    """CI/CD runner with credential rotation: rapid auth failures from external IP then success.
+
+    Looks exactly like a brute-force burst (external IP, 6-10 failures in < 10 min)
+    but every attempt is from a known service account during a deploy pipeline.
+    """
+    events = []
+    ci_ip = rng.choice(EXTERNAL_IPS)  # GitHub Actions / GitLab runner IP
+    svc_account = "svc_deploy"
+    fail_count = rng.randint(6, 10)  # Intentionally above RAPID_THRESHOLD to stress-test
+
+    for i in range(fail_count):
+        events.append({
+            "timestamp": _ts(base_time, i * 0.3),
+            "sourcetype": "auth",
+            "src_ip": ci_ip,
+            "dest_ip": rng.choice(INTERNAL_IPS),
+            "user": svc_account,
+            "action": "failure",
+            "event_type": "authentication",
+            "message": f"CI auth failure (key rotation in progress): {svc_account}",
+            "label": "benign",
+            "attack_type": "none",
+        })
+
+    events.append({
+        "timestamp": _ts(base_time, fail_count * 0.3 + 0.5),
+        "sourcetype": "auth",
+        "src_ip": ci_ip,
+        "dest_ip": rng.choice(INTERNAL_IPS),
+        "user": svc_account,
+        "action": "success",
+        "event_type": "authentication",
+        "message": f"CI auth success: {svc_account} after key rotation",
+        "label": "benign",
+        "attack_type": "none",
+    })
+
+    return events
+
+
+def _gen_hard_neg_analytics_dns(base_time: datetime, rng: random.Random) -> list:
+    """Analytics SDK using unique per-session subdomains — resembles DNS exfiltration.
+
+    High-entropy hex session IDs sent to an analytics vendor not in the benign-domain
+    allowlist. Hits length, entropy, uniqueness, and volume thresholds simultaneously.
+    """
+    events = []
+    src = rng.choice(INTERNAL_IPS)
+    # Analytics vendors intentionally NOT in BENIGN_DNS_BASE_DOMAINS
+    vendor = rng.choice(["segment.io", "heapanalytics.com", "mixpanel.com", "datadoghq.com"])
+    count = rng.randint(10, 20)
+
+    for i in range(count):
+        hex_id = "".join(rng.choices("0123456789abcdef", k=rng.randint(32, 48)))
+        query = f"{hex_id}.{vendor}"
+        events.append({
+            "timestamp": _ts(base_time, i * 1.5),
+            "sourcetype": "dns",
+            "src_ip": src,
+            "dest_ip": "8.8.8.8",
+            "query": query,
+            "query_length": len(query),
+            "query_type": rng.choice(["A", "CNAME"]),
+            "event_type": "dns",
+            "message": f"Analytics tracking: {query[:60]}",
+            "label": "benign",
+            "attack_type": "none",
+        })
+
+    return events
+
+
+def _gen_hard_neg_monitoring_beacon(base_time: datetime, rng: random.Random) -> list:
+    """Monitoring agent with strict 60-second heartbeats — resembles C2 beaconing.
+
+    Extremely regular timing, small payloads, always port 443 to same dest IP.
+    Satisfies every C2 heuristic but is a legitimate observability agent.
+    """
+    events = []
+    src = rng.choice(INTERNAL_IPS)
+    dest = rng.choice(EXTERNAL_IPS)
+    count = rng.randint(20, 40)
+
+    for i in range(count):
+        events.append({
+            "timestamp": _ts(base_time, i * 1.0),  # Exactly 60-second intervals
+            "sourcetype": "firewall",
+            "src_ip": src,
+            "dest_ip": dest,
+            "dest_port": 443,
+            "action": "allowed",
+            "direction": "outbound",
+            "bytes_out": rng.randint(80, 220),
+            "bytes_in": rng.randint(30, 100),
+            "event_type": "network",
+            "message": f"Monitoring heartbeat {src} -> {dest}:443",
+            "label": "benign",
+            "attack_type": "none",
+        })
+
+    return events
+
+
+def _gen_hard_neg_backup_smb(base_time: datetime, rng: random.Random) -> list:
+    """Backup agent probing many hosts for changed-file metadata — resembles lateral movement.
+
+    Sequential, rapid SMB connections to many internal hosts within the detection
+    window. Intentionally keeps bytes_out low (metadata only) to hit the transfer
+    guard in the lateral-movement rule.
+    """
+    events = []
+    backup_server = INTERNAL_IPS[0]
+    targets = rng.sample(INTERNAL_IPS[1:], k=rng.randint(5, 9))
+
+    for i, target in enumerate(targets):
+        events.append({
+            "timestamp": _ts(base_time, i * 2.0),  # Fast enough to fit in 20-min window
+            "sourcetype": "firewall",
+            "src_ip": backup_server,
+            "dest_ip": target,
+            "dest_port": 445,
+            "action": "allowed",
+            "direction": "internal",
+            "bytes_out": rng.randint(200, 5000),  # Metadata probe, not full transfer
+            "event_type": "network",
+            "message": f"Backup metadata scan {backup_server} -> {target}:445",
+            "label": "benign",
+            "attack_type": "none",
+        })
+
+    return events
+
+
 def _gen_normal_auth(base_time: datetime, rng: random.Random) -> list:
     """Normal clean authentication events."""
     events = []
@@ -615,6 +753,75 @@ def _gen_normal_process(base_time: datetime, rng: random.Random) -> list:
 
 # ═══ Dataset Generation ══════════════════════════════════════════════════════
 
+# ═══ NEAR-MISS malicious variants (evade current threshold defaults) ══════════════
+# These ARE malicious but each individual source/connection falls just under
+# the default per-actor threshold. They measure rule sophistication gaps.
+
+def _gen_near_miss_distributed_brute(base_time: datetime, rng: random.Random) -> list:
+    """Distributed brute force: same target user, different proxy source IPs.
+
+    Each IP contributes fewer failures than RAPID_THRESHOLD (default=6) so the
+    per-actor bucket never fires, but cumulatively many failures are made.
+    Detection requires correlating across source IPs by target user.
+    """
+    events = []
+    target_user = rng.choice(USERS)
+    attacker_ips = rng.sample(EXTERNAL_IPS, k=rng.randint(3, 6))
+
+    for attacker_ip in attacker_ips:
+        failures_per_ip = rng.randint(3, 5)  # Always below RAPID_THRESHOLD=6
+        for j in range(failures_per_ip):
+            events.append({
+                "timestamp": _ts(base_time, j * 1.5),
+                "sourcetype": "auth",
+                "src_ip": attacker_ip,
+                "dest_ip": rng.choice(INTERNAL_IPS),
+                "user": target_user,
+                "action": "failure",
+                "event_type": "authentication",
+                "message": f"Failed login for {target_user} from {attacker_ip}",
+                "label": "malicious",
+                "attack_type": "distributed_brute_force",
+                "mitre": "T1110.004",
+            })
+
+    return events
+
+
+def _gen_near_miss_fragmented_c2(base_time: datetime, rng: random.Random) -> list:
+    """Fragmented C2: traffic spread across multiple destination IPs.
+
+    Each dest IP receives fewer connections than MIN_CONNECTIONS (default=5) so the
+    per-pair group never reaches the beaconing threshold. Detection requires
+    correlating across destinations by source IP pattern and timing regularity.
+    """
+    events = []
+    src = rng.choice(INTERNAL_IPS)
+    c2_ips = rng.sample(EXTERNAL_IPS, k=rng.randint(4, 7))
+
+    for i, c2_ip in enumerate(c2_ips):
+        conn_count = rng.randint(3, 4)  # Always below MIN_CONNECTIONS=5
+        for j in range(conn_count):
+            events.append({
+                "timestamp": _ts(base_time, i * 20 + j * 4),
+                "sourcetype": "firewall",
+                "src_ip": src,
+                "dest_ip": c2_ip,
+                "dest_port": 443,
+                "action": "allowed",
+                "direction": "outbound",
+                "bytes_out": rng.randint(100, 350),
+                "bytes_in": rng.randint(50, 130),
+                "event_type": "network",
+                "message": f"Fragmented C2 {src} -> {c2_ip}:443",
+                "label": "malicious",
+                "attack_type": "fragmented_c2",
+                "mitre": "T1071",
+            })
+
+    return events
+
+
 # Standard attacks (catchable with good rules)
 ATTACK_GENERATORS = {
     "brute_force":          (_gen_brute_force, 12),
@@ -627,10 +834,13 @@ ATTACK_GENERATORS = {
 
 # Stealthy attacks (harder to detect — distinguishes good from great detection)
 STEALTHY_GENERATORS = {
-    "slow_brute_force":     (_gen_slow_brute_force, 20),
-    "stealthy_c2":          (_gen_stealthy_c2, 10),
-    "encoded_exfil":        (_gen_encoded_exfil, 8),
-    "fileless_attack":      (_gen_fileless_attack, 15),
+    "slow_brute_force":          (_gen_slow_brute_force, 20),
+    "stealthy_c2":               (_gen_stealthy_c2, 10),
+    "encoded_exfil":             (_gen_encoded_exfil, 8),
+    "fileless_attack":           (_gen_fileless_attack, 15),
+    # Near-miss variants: evade current threshold defaults
+    "distributed_brute_force":   (_gen_near_miss_distributed_brute, 12),
+    "fragmented_c2":             (_gen_near_miss_fragmented_c2, 8),
 }
 
 # Benign events (including noisy ones that cause false positives)
@@ -643,12 +853,17 @@ BENIGN_GENERATORS = [
 
 # Noisy benign (designed to trigger false positives in naive rules)
 NOISY_BENIGN_GENERATORS = [
-    (_gen_noisy_auth, 25),         # password typos look like brute force
-    (_gen_long_dns_benign, 30),    # CDN domains look like DNS exfil
-    (_gen_admin_smb, 8),           # admin SMB looks like lateral movement
-    (_gen_legit_powershell, 20),   # legit PS looks like abuse
-    (_gen_legit_sudo, 15),         # legit sudo looks like privesc
-    (_gen_chatty_service, 6),      # API services look like beaconing
+    (_gen_noisy_auth, 25),               # password typos look like brute force
+    (_gen_long_dns_benign, 30),          # CDN domains look like DNS exfil
+    (_gen_admin_smb, 8),                 # admin SMB looks like lateral movement
+    (_gen_legit_powershell, 20),         # legit PS looks like abuse
+    (_gen_legit_sudo, 15),               # legit sudo looks like privesc
+    (_gen_chatty_service, 6),            # API services look like beaconing
+    # Hard negatives: benign events that closely mimic attack signatures
+    (_gen_hard_neg_ci_auth, 8),          # CI/CD auth burst resembles brute force
+    (_gen_hard_neg_analytics_dns, 10),   # analytics tracking resembles DNS exfil
+    (_gen_hard_neg_monitoring_beacon, 6), # monitoring heartbeat resembles C2
+    (_gen_hard_neg_backup_smb, 6),       # backup scan resembles lateral movement
 ]
 
 
