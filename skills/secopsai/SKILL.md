@@ -70,9 +70,10 @@ cd "$HOME/secopsai" && source .venv/bin/activate && python run_openclaw_live.py 
 Example reply:
 
 > Daily SecOps summary: 3 findings (2 HIGH, 1 MEDIUM).
+>
 > - HIGH: OCF-C9D2523C770B6731 — OpenClaw Dangerous Exec / Tool Burst
 > - HIGH: OCF-62FA8D1D3578BF6E — OpenClaw Sensitive Config
-> Reply `triage OCF-...` to mark as reviewed, or `mitigate OCF-...` for remediation steps.
+>   Reply `triage OCF-...` to mark as reviewed, or `mitigate OCF-...` for remediation steps.
 
 ---
 
@@ -164,6 +165,7 @@ cd "$HOME/secopsai" && source .venv/bin/activate && python openclaw_plugin.py mi
 Reply with a numbered list of the `recommended_actions`. Example:
 
 > Mitigation steps for **OCF-C9D2523C770B6731** (HIGH — OpenClaw Dangerous Exec / Tool Burst):
+>
 > 1. Identify which agent or skill issued the dangerous execs and confirm business justification.
 > 2. If unauthorized, disable or restrict that skill/tool configuration in OpenClaw.
 > 3. Rotate any secrets used in the commands (tokens, SSH keys, API keys).

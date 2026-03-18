@@ -1,12 +1,35 @@
 <p align="center">
-  <h1 align="center">🛡️ SecOps Autoresearch</h1>
-  <p align="center">
-    <strong>Autonomous Security Detection Optimization</strong>
-  </p>
-  <p align="center">
-    Inspired by <a href="https://github.com/karpathy/autoresearch">karpathy/autoresearch</a> · Built on <a href="https://github.com/Techris93/OpenSentinel">OpenSentinel</a>
-  </p>
+  <img src="favicon.svg" alt="SecOpsAI" width="64" />
 </p>
+
+<h1 align="center">SecOpsAI</h1>
+
+<p align="center">
+  <strong>Intelligent attack detection for OpenClaw audit logs.</strong><br/>
+  Local-first · Zero external APIs · Conversational triage via WhatsApp
+</p>
+
+<p align="center">
+  <a href="https://secopsai.dev/docs/getting-started">Docs</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="docs/OpenClaw-Integration.md">OpenClaw Integration</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
+
+---
+
+## What is SecOpsAI?
+
+SecOpsAI is an open-source security detection pipeline for [OpenClaw](https://docs.openclaw.ai) audit logs. It:
+
+- **Detects** dangerous exec, policy abuse, data exfiltration, tool bursts, pairing churn, and more — using 100+ tuned detection rules
+- **Scores and deduplicates** findings into a local SOC store (SQLite, no cloud account needed)
+- **Explains** every detection with MITRE ATT&CK–aligned reason codes
+- **Triages** findings through a CLI or conversationally via WhatsApp (Twilio) or OpenClaw chat
+- **Mitigates** by providing curated, rule-specific remediation steps for each finding
+- **Trains itself** using an autoresearch loop — benchmark → tune → benchmark — to keep F1 score high as your environment changes
+
+Everything runs locally. No GPU, no external APIs, no data leaves your machine.
 
 ---
 

@@ -2,9 +2,15 @@ data/
 __pycache__/
 *.pyc
 site/
+.venv/
+*.code-workspace
 
 # Local OpenClaw findings artifacts
 data/openclaw/findings/*.json
 data/openclaw/findings/*.db
 findings/*.json
 findings/*.db
+findings/*.db-journal
+
+# Generated finding bundles (runtime output)
+findings/openclaw-findings-*.json
